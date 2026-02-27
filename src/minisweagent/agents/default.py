@@ -4,6 +4,9 @@ or https://minimal-agent.com for a tutorial on the basic building principles.
 
 import json
 import logging
+from logging.handlers import RotatingFileHandler
+
+import os
 import traceback
 from pathlib import Path
 
@@ -41,6 +44,15 @@ class DefaultAgent:
         self.logger = logging.getLogger("agent")
         self.cost = 0.0
         self.n_calls = 0
+
+        if not self.logger.handlers:
+            os.makedirs("logs", exist_ok=True)
+            handler = RotatingFileHandler(os.path.join("logs", "agent.log"), maxBytes=1000000, backupCount=3)
+            formatter = logging.Formatter('[%(levelname)s] %(name)s: %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+        self.logger.setLevel(logging.DEBUG)
+
 
     def get_template_vars(self, **kwargs) -> dict:
         return recursive_merge(
@@ -118,7 +130,19 @@ class DefaultAgent:
 
     def execute_actions(self, message: dict) -> list[dict]:
         """Execute actions in message, add observation messages, return them."""
-        outputs = [self.env.execute(action) for action in message.get("extra", {}).get("actions", [])]
+        actions = message.get("extra", {}).get("actions", [])
+        outputs = []
+        
+        for action in actions:
+            if action.get("type") == "mcp":
+                # Route MCP actions directly to MCP handler
+                from minisweagent.models.utils.mcp_http_tools import invoke_mcp_action
+                self.logger.info(f"Executing MCP action: {action.get('mcp_tool')}")
+                outputs.append(invoke_mcp_action(action))
+            else:
+                # Route bash commands to environment
+                outputs.append(self.env.execute(action))
+        
         return self.add_messages(*self.model.format_observation_messages(message, outputs, self.get_template_vars()))
 
     def serialize(self, *extra_dicts) -> dict:

@@ -23,7 +23,6 @@ from minisweagent.models.utils.retry import retry
 
 logger = logging.getLogger("litellm_model")
 
-
 class LitellmModelConfig(BaseModel):
     model_name: str
     """Model name. Highly recommended to include the provider in the model name, e.g., `anthropic/claude-sonnet-4-5-20250929`."""
@@ -131,6 +130,8 @@ class LitellmModel:
 
     def _parse_actions(self, response) -> list[dict]:
         """Parse tool calls from the response. Raises FormatError if unknown tool."""
+        logger.info("Parsing tool calls from model response") 
+        logger.debug(f"Model response: {response}")
         tool_calls = response.choices[0].message.tool_calls or []
         return parse_toolcall_actions(
             tool_calls,

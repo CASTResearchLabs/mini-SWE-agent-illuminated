@@ -70,7 +70,18 @@ class InteractiveAgent(DefaultAgent):
                     return msg
         try:
             with console.status("Waiting for the LM to respond..."):
-                return super().query()
+                response = super().query()
+                console.print(f"[bold magenta]DEBUG: Model response received[/bold magenta]")
+                console.print(f"[dim]Response role: {response.get('role', 'unknown')}[/dim]")
+                console.print(f"[dim]Response extra keys: {list(response.get('extra', {}).keys())}[/dim]")
+                actions = response.get("extra", {}).get("actions", [])
+                console.print(f"[dim]Actions extracted: {len(actions)} actions[/dim]")
+                if actions:
+                    for i, action in enumerate(actions):
+                        console.print(f"[dim]  Action {i+1}: {action.get('type', 'unknown')} - {action}[/dim]")
+                else:
+                    console.print(f"[bold red]DEBUG: No actions in model response! Full extra: {response.get('extra', {})}[/bold red]")
+                return response
         except LimitsExceeded:
             console.print(
                 f"Limits exceeded. Limits: {self.config.step_limit} steps, ${self.config.cost_limit}.\n"
@@ -97,7 +108,20 @@ class InteractiveAgent(DefaultAgent):
 
     def execute_actions(self, message: dict) -> list[dict]:
         # Override to handle user confirmation and confirm_exit, with try/finally to preserve partial outputs
-        actions = message.get("extra", {}).get("actions", [])
+        console.print(f"[bold magenta]DEBUG: execute_actions called[/bold magenta]")
+        console.print(f"[dim]Message role: {message.get('role', 'unknown')}[/dim]")
+        console.print(f"[dim]Message has extra: {'extra' in message}[/dim]")
+        extra = message.get("extra", {})
+        console.print(f"[dim]Extra keys: {list(extra.keys())}[/dim]")
+        actions = extra.get("actions", [])
+        console.print(f"[bold magenta]DEBUG: Processing {len(actions)} actions[/bold magenta]")
+        if actions:
+            for i, action in enumerate(actions):
+                console.print(f"[dim]Action {i+1}: {action}[/dim]")
+        else:
+            console.print("[bold red]DEBUG: No actions found in message![/bold red]")
+            console.print(f"[bold red]DEBUG: Full extra content: {extra}[/bold red]")
+        
         commands = [
             action.get("command")
             or f"{action.get('mcp_server', 'mcp')}:{action.get('mcp_tool', action.get('type', 'action'))}"
@@ -107,7 +131,16 @@ class InteractiveAgent(DefaultAgent):
         try:
             self._ask_confirmation_or_interrupt(commands)
             for action in actions:
-                outputs.append(self.env.execute(action))
+                if action.get("type") == "mcp":
+                    # Route MCP actions directly to MCP handler
+                    from minisweagent.models.utils.mcp_http_tools import invoke_mcp_action
+                    console.print(f"[bold blue]DEBUG: Executing MCP action: {action.get('mcp_tool')}[/bold blue]")
+                    self.logger.info(f"Executing MCP action: {action.get('mcp_tool')}")
+                    outputs.append(invoke_mcp_action(action))
+                else:
+                    # Route bash commands to environment
+                    console.print(f"[bold yellow]DEBUG: Executing bash command: {action.get('command', 'unknown')}[/bold yellow]")
+                    outputs.append(self.env.execute(action))
         except Submitted as e:
             self._check_for_new_task_or_submit(e)
         finally:

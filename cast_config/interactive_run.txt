@@ -1,0 +1,1 @@
+mini -m openai/gpt-4o -t "explain the help you can get from structural and semantic MCP servers" -l 1.00 --config ./cast_config/swebench.yaml --mcp-http-config ./cast_config/mcp_http_config.yaml --model-class litellm --agent-class interactive --environment-class local --exit-immediately

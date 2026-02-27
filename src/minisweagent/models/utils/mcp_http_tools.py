@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,9 @@ import httpx
 import yaml
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+
+# Set up logger for MCP HTTP tools
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -42,7 +46,7 @@ def load_mcp_http_servers(path: Path | str) -> list[MCPHTTPServerConfig]:
 
 async def _rpc_call(url: str, headers: dict[str, str], method: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
     """Make an RPC call using the official MCP client."""
-    print(f"[MCP HTTP DEBUG] Making RPC call to {url}, method: {method}")
+    logger.info(f"Making RPC call to {url}, method: {method}")
     
     # Create httpx client with headers
     http_client = httpx.AsyncClient(
@@ -55,30 +59,30 @@ async def _rpc_call(url: str, headers: dict[str, str], method: str, params: dict
             read_stream, write_stream = streams[0], streams[1]  # Ignore the third value (session)
             async with ClientSession(read_stream, write_stream) as session:
                 if method == "initialize":
-                    print(f"[MCP HTTP DEBUG] Initializing connection...")
+                    logger.info("Initializing connection...")
                     await session.initialize()
-                    print(f"[MCP HTTP DEBUG] Connection initialized")
+                    logger.info("Connection initialized")
                     return {"protocolVersion": "2025-03-26", "capabilities": {}, "serverInfo": {"name": "mcp-server"}}
                 
                 elif method == "tools/list":
-                    print(f"[MCP HTTP DEBUG] Listing tools...")
+                    logger.info("Listing tools...")
                     tools_response = await session.list_tools()
-                    print(f"[MCP HTTP DEBUG] Found {len(tools_response.tools)} tools")
+                    logger.info(f"Found {len(tools_response.tools)} tools")
                     return {"tools": [{"name": tool.name, "description": tool.description, "inputSchema": tool.inputSchema} for tool in tools_response.tools]}
                 
                 elif method == "tools/call":
                     tool_name = params.get("name")
                     arguments = params.get("arguments", {})
-                    print(f"[MCP HTTP DEBUG] Calling tool {tool_name} with arguments: {arguments}")
+                    logger.info(f"Calling tool {tool_name} with arguments: {arguments}")
                     result = await session.call_tool(tool_name, arguments)
                     return {"content": [{"type": "text", "text": content.text if hasattr(content, 'text') else str(content)} for content in result.content]}
                 
                 else:
-                    print(f"[MCP HTTP DEBUG] Unknown method: {method}")
+                    logger.warning(f"Unknown method: {method}")
                     return {}
                     
     except Exception as e:
-        print(f"[MCP HTTP DEBUG] Error in RPC call: {e}")
+        logger.error(f"Error in RPC call: {e}")
         raise RuntimeError(f"MCP RPC error calling {method}: {e}")
     finally:
         await http_client.aclose()
@@ -107,7 +111,7 @@ def build_mcp_openai_tools(
 
     for server in load_mcp_http_servers(mcp_http_config):
         try:
-            print(f"[MCP HTTP DEBUG] Processing server: {server.name}")
+            logger.info(f"Processing server: {server.name}")
             _rpc(
                 server.url,
                 server.headers,
@@ -121,8 +125,8 @@ def build_mcp_openai_tools(
             )
             list_result = _rpc(server.url, server.headers, "tools/list", {}, timeout)
         except Exception as e:
-            print(f"[MCP HTTP DEBUG] Server {server.name} failed: {e}")
-            print(f"[MCP HTTP DEBUG] Skipping server {server.name} and continuing with others")
+            logger.error(f"Server {server.name} failed: {e}")
+            logger.info(f"Skipping server {server.name} and continuing with others")
             continue
             
         for mcp_tool in list_result.get("tools", []):
@@ -156,7 +160,7 @@ def build_mcp_openai_tools(
                 "mcp_tool": mcp_tool.get("name", ""),
             }
     
-    print(f"[MCP HTTP DEBUG] Successfully loaded {len(tools)} tools from {len([s for s in load_mcp_http_servers(mcp_http_config)])} servers")
+    logger.info(f"Successfully loaded {len(tools)} tools from available servers")
     return tools, action_tool_mapping
 
 
@@ -167,7 +171,7 @@ async def _invoke_mcp_action_async(action: dict[str, Any], *, timeout: int = 60)
     tool_name = action["mcp_tool"]
     arguments = action.get("arguments", {})
     
-    print(f"[MCP HTTP DEBUG] Invoking tool {tool_name} at {url}")
+    logger.info(f"Invoking tool {tool_name} at {url}")
     
     # Create httpx client with headers
     http_client = httpx.AsyncClient(
@@ -191,6 +195,7 @@ async def _invoke_mcp_action_async(action: dict[str, Any], *, timeout: int = 60)
                         text_parts.append(str(content))
                 
                 output_text = "\n".join(text_parts) if text_parts else "No output"
+                logger.info(f"Tool {tool_name} completed successfully")
                 
                 return {
                     "output": output_text,
@@ -200,7 +205,7 @@ async def _invoke_mcp_action_async(action: dict[str, Any], *, timeout: int = 60)
                 }
                 
     except Exception as e:
-        print(f"[MCP HTTP DEBUG] Error invoking action: {e}")
+        logger.error(f"Error invoking action: {e}")
         return {
             "output": f"Error: {e}",
             "returncode": 1,
