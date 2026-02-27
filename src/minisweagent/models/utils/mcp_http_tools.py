@@ -1,11 +1,14 @@
+import asyncio
 import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import requests
+import httpx
 import yaml
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 
 
 @dataclass
@@ -37,14 +40,53 @@ def load_mcp_http_servers(path: Path | str) -> list[MCPHTTPServerConfig]:
     return [_normalize_server_config(server) for server in servers_raw]
 
 
+async def _rpc_call(url: str, headers: dict[str, str], method: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
+    """Make an RPC call using the official MCP client."""
+    print(f"[MCP HTTP DEBUG] Making RPC call to {url}, method: {method}")
+    
+    # Create httpx client with headers
+    http_client = httpx.AsyncClient(
+        headers=headers if headers else {},
+        timeout=httpx.Timeout(timeout)
+    )
+    
+    try:
+        async with streamable_http_client(url, http_client=http_client) as streams:
+            read_stream, write_stream = streams[0], streams[1]  # Ignore the third value (session)
+            async with ClientSession(read_stream, write_stream) as session:
+                if method == "initialize":
+                    print(f"[MCP HTTP DEBUG] Initializing connection...")
+                    await session.initialize()
+                    print(f"[MCP HTTP DEBUG] Connection initialized")
+                    return {"protocolVersion": "2025-03-26", "capabilities": {}, "serverInfo": {"name": "mcp-server"}}
+                
+                elif method == "tools/list":
+                    print(f"[MCP HTTP DEBUG] Listing tools...")
+                    tools_response = await session.list_tools()
+                    print(f"[MCP HTTP DEBUG] Found {len(tools_response.tools)} tools")
+                    return {"tools": [{"name": tool.name, "description": tool.description, "inputSchema": tool.inputSchema} for tool in tools_response.tools]}
+                
+                elif method == "tools/call":
+                    tool_name = params.get("name")
+                    arguments = params.get("arguments", {})
+                    print(f"[MCP HTTP DEBUG] Calling tool {tool_name} with arguments: {arguments}")
+                    result = await session.call_tool(tool_name, arguments)
+                    return {"content": [{"type": "text", "text": content.text if hasattr(content, 'text') else str(content)} for content in result.content]}
+                
+                else:
+                    print(f"[MCP HTTP DEBUG] Unknown method: {method}")
+                    return {}
+                    
+    except Exception as e:
+        print(f"[MCP HTTP DEBUG] Error in RPC call: {e}")
+        raise RuntimeError(f"MCP RPC error calling {method}: {e}")
+    finally:
+        await http_client.aclose()
+
+
 def _rpc(url: str, headers: dict[str, str], method: str, params: dict[str, Any], timeout: int) -> dict[str, Any]:
-    payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-    response = requests.post(url, json=payload, headers=headers, timeout=timeout)
-    response.raise_for_status()
-    data = response.json()
-    if "error" in data:
-        raise RuntimeError(f"MCP RPC error calling {method}: {data['error']}")
-    return data.get("result", {})
+    """Synchronous wrapper for async RPC calls."""
+    return asyncio.run(_rpc_call(url, headers, method, params, timeout))
 
 
 def _sanitize_tool_name(name: str) -> str:
@@ -64,18 +106,25 @@ def build_mcp_openai_tools(
     used_names: set[str] = set()
 
     for server in load_mcp_http_servers(mcp_http_config):
-        _rpc(
-            server.url,
-            server.headers,
-            "initialize",
-            {
-                "protocolVersion": "2025-03-26",
-                "capabilities": {},
-                "clientInfo": {"name": "mini-swe-agent", "version": "2"},
-            },
-            timeout,
-        )
-        list_result = _rpc(server.url, server.headers, "tools/list", {}, timeout)
+        try:
+            print(f"[MCP HTTP DEBUG] Processing server: {server.name}")
+            _rpc(
+                server.url,
+                server.headers,
+                "initialize",
+                {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "mini-swe-agent", "version": "2"},
+                },
+                timeout,
+            )
+            list_result = _rpc(server.url, server.headers, "tools/list", {}, timeout)
+        except Exception as e:
+            print(f"[MCP HTTP DEBUG] Server {server.name} failed: {e}")
+            print(f"[MCP HTTP DEBUG] Skipping server {server.name} and continuing with others")
+            continue
+            
         for mcp_tool in list_result.get("tools", []):
             base_name = f"{prefix}{_sanitize_tool_name(server.name)}__{_sanitize_tool_name(mcp_tool.get('name', 'tool'))}"
             openai_name = base_name
@@ -106,32 +155,62 @@ def build_mcp_openai_tools(
                 "mcp_headers": server.headers,
                 "mcp_tool": mcp_tool.get("name", ""),
             }
+    
+    print(f"[MCP HTTP DEBUG] Successfully loaded {len(tools)} tools from {len([s for s in load_mcp_http_servers(mcp_http_config)])} servers")
     return tools, action_tool_mapping
 
 
-def invoke_mcp_action(action: dict[str, Any], *, timeout: int = 60) -> dict[str, Any]:
-    result = _rpc(
-        action["mcp_url"],
-        action.get("mcp_headers", {}),
-        "tools/call",
-        {"name": action["mcp_tool"], "arguments": action.get("arguments", {})},
-        timeout,
+async def _invoke_mcp_action_async(action: dict[str, Any], *, timeout: int = 60) -> dict[str, Any]:
+    """Async version of invoke_mcp_action using proper MCP client."""
+    url = action["mcp_url"]
+    headers = action.get("mcp_headers", {})
+    tool_name = action["mcp_tool"]
+    arguments = action.get("arguments", {})
+    
+    print(f"[MCP HTTP DEBUG] Invoking tool {tool_name} at {url}")
+    
+    # Create httpx client with headers
+    http_client = httpx.AsyncClient(
+        headers=headers if headers else {},
+        timeout=httpx.Timeout(timeout)
     )
+    
+    try:
+        async with streamable_http_client(url, http_client=http_client) as streams:
+            read_stream, write_stream = streams[0], streams[1]  # Ignore the third value (session)
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments)
+                
+                # Extract text content
+                text_parts = []
+                for content in result.content:
+                    if hasattr(content, 'text'):
+                        text_parts.append(content.text)
+                    else:
+                        text_parts.append(str(content))
+                
+                output_text = "\n".join(text_parts) if text_parts else "No output"
+                
+                return {
+                    "output": output_text,
+                    "returncode": 0,
+                    "exception_info": "",
+                    "extra": {"mcp": {"content": [{"type": "text", "text": part} for part in text_parts]}},
+                }
+                
+    except Exception as e:
+        print(f"[MCP HTTP DEBUG] Error invoking action: {e}")
+        return {
+            "output": f"Error: {e}",
+            "returncode": 1,
+            "exception_info": str(e),
+            "extra": {"mcp": {"error": str(e)}},
+        }
+    finally:
+        await http_client.aclose()
 
-    content = result.get("content") or []
-    text_parts = []
-    for item in content:
-        if isinstance(item, dict) and item.get("type") == "text":
-            text_parts.append(str(item.get("text", "")))
-        else:
-            text_parts.append(json.dumps(item, ensure_ascii=False))
-    output_text = "\n".join(part for part in text_parts if part)
-    if not output_text:
-        output_text = json.dumps(result, ensure_ascii=False)
 
-    return {
-        "output": output_text,
-        "returncode": 1 if result.get("isError") else 0,
-        "exception_info": "",
-        "extra": {"mcp": result},
-    }
+def invoke_mcp_action(action: dict[str, Any], *, timeout: int = 60) -> dict[str, Any]:
+    """Synchronous wrapper for async MCP action invocation."""
+    return asyncio.run(_invoke_mcp_action_async(action, timeout=timeout))

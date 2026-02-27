@@ -1,0 +1,9 @@
+servers:
+  - name: structural-search
+    url: http://localhost:8282/mcp
+    headers:
+      x-api-key: Q5Fxrp3E.W7U4HfovfeE4HGHM3FacfsTyLEDcgQHf
+  - name: portfolio-benchmarking
+    url: http://localhost:5186/mcp
+  - name: semantic-search
+    url: http://localhost:8286/mcp
