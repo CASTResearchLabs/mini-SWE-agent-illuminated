@@ -17,6 +17,7 @@ from minisweagent.models.utils.actions_toolcall import (
 )
 from minisweagent.models.utils.anthropic_utils import _reorder_anthropic_thinking_blocks
 from minisweagent.models.utils.cache_control import set_cache_control
+from minisweagent.models.utils.mcp_http_tools import build_mcp_openai_tools
 from minisweagent.models.utils.openai_multimodal import expand_multimodal_content
 from minisweagent.models.utils.retry import retry
 
@@ -43,6 +44,12 @@ class LitellmModelConfig(BaseModel):
     """Template used to render the observation after executing an action."""
     multimodal_regex: str = ""
     """Regex to extract multimodal content. Empty string disables multimodal processing."""
+    mcp_http_config: Path | str | None = None
+    """Path to MCP Streamable-HTTP server configuration (JSON/YAML)."""
+    mcp_tool_prefix: str = "mcp__"
+    """Prefix for exposing MCP tools to the LM."""
+    mcp_http_timeout: int = 20
+    """Timeout in seconds for MCP HTTP requests."""
 
 
 class LitellmModel:
@@ -57,15 +64,25 @@ class LitellmModel:
 
     def __init__(self, *, config_class: Callable = LitellmModelConfig, **kwargs):
         self.config = config_class(**kwargs)
+        self._action_tool_mapping: dict[str, dict] = {}
+        self._tools = [BASH_TOOL]
         if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file():
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
+        if self.config.mcp_http_config:
+            mcp_tools, mapping = build_mcp_openai_tools(
+                self.config.mcp_http_config,
+                prefix=self.config.mcp_tool_prefix,
+                timeout=self.config.mcp_http_timeout,
+            )
+            self._tools += mcp_tools
+            self._action_tool_mapping |= mapping
 
     def _query(self, messages: list[dict[str, str]], **kwargs):
         try:
             return litellm.completion(
                 model=self.config.model_name,
                 messages=messages,
-                tools=[BASH_TOOL],
+                tools=self._tools,
                 **(self.config.model_kwargs | kwargs),
             )
         except litellm.exceptions.AuthenticationError as e:
@@ -115,7 +132,11 @@ class LitellmModel:
     def _parse_actions(self, response) -> list[dict]:
         """Parse tool calls from the response. Raises FormatError if unknown tool."""
         tool_calls = response.choices[0].message.tool_calls or []
-        return parse_toolcall_actions(tool_calls, format_error_template=self.config.format_error_template)
+        return parse_toolcall_actions(
+            tool_calls,
+            format_error_template=self.config.format_error_template,
+            action_tool_mapping=self._action_tool_mapping,
+        )
 
     def format_message(self, **kwargs) -> dict:
         return expand_multimodal_content(kwargs, pattern=self.config.multimodal_regex)

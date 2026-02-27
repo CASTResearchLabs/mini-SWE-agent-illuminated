@@ -23,6 +23,13 @@ Useful switches:
   It's enough to specify the name of the config file, e.g., `-c mini.yaml` (see [global configuration](../advanced/global_configuration.md) for how it is resolved).
 - `-m`/`--model`: Specify a model to use, else we will use the model `MSWEA_MODEL_NAME` environment variable (see [global configuration](../advanced/global_configuration.md))
 - `-y`/`--yolo`: Start in `yolo` mode (see below)
+- `--mcp-http-config`: Path to a JSON/YAML file listing MCP Streamable-HTTP servers to expose as tools to the model
+
+Example with MCP tools enabled:
+
+```bash
+mini --model-class litellm --agent-class interactive --mcp-http-config tests/test_data/mcp_http_config.yaml
+```
 
 ## Modes of operation
 

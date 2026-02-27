@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from typer.models import OptionInfo
 from rich.console import Console
 
 from minisweagent import global_config_dir
@@ -15,6 +16,7 @@ from minisweagent.agents import get_agent
 from minisweagent.agents.utils.prompt_user import _multiline_prompt
 from minisweagent.config import builtin_config_dir, get_config_from_spec
 from minisweagent.environments import get_environment
+from minisweagent.environments.extra.mcp_router import MCPRouterEnvironment
 from minisweagent.models import get_model
 from minisweagent.run.utilities.config import configure_if_first_time
 from minisweagent.utils.serialize import UNSET, recursive_merge
@@ -62,10 +64,12 @@ def main(
     cost_limit: float | None = typer.Option(None, "-l", "--cost-limit", help="Cost limit. Set to 0 to disable."),
     config_spec: list[str] = typer.Option([str(DEFAULT_CONFIG_FILE)], "-c", "--config", help=_CONFIG_SPEC_HELP_TEXT),
     output: Path | None = typer.Option(DEFAULT_OUTPUT_FILE, "-o", "--output", help="Output trajectory file"),
+    mcp_http_config: Path | None = typer.Option(None, "--mcp-http-config", help="Path to MCP Streamable-HTTP server config file"),
     exit_immediately: bool = typer.Option(False, "--exit-immediately", help="Exit immediately when the agent wants to finish instead of prompting.", rich_help_panel="Advanced"),
 ) -> Any:
     # fmt: on
     configure_if_first_time()
+    resolved_mcp_http_config = None if isinstance(mcp_http_config, OptionInfo) else mcp_http_config
 
     # Build the config from the command line arguments
     console.print(f"Building agent config from specs: [bold green]{config_spec}[/bold green]")
@@ -84,6 +88,7 @@ def main(
         "model": {
             "model_class": model_class or UNSET,
             "model_name": model_name or UNSET,
+            "mcp_http_config": str(resolved_mcp_http_config) if resolved_mcp_http_config else UNSET,
         },
         "environment": {
             "environment_class": environment_class or UNSET,
@@ -98,6 +103,9 @@ def main(
 
     model = get_model(config=config.get("model", {}))
     env = get_environment(config.get("environment", {}), default_type="local")
+    mcp_http_config_value = config.get("model", {}).get("mcp_http_config", UNSET)
+    if isinstance(mcp_http_config_value, Path | str) and str(mcp_http_config_value):
+        env = MCPRouterEnvironment(env)
     agent = get_agent(model, env, config.get("agent", {}), default_type="interactive")
     agent.run(run_task)
     if (output_path := config.get("agent", {}).get("output_path")):

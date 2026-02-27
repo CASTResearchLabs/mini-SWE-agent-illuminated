@@ -94,6 +94,45 @@ def test_mini_command_calls_run_interactive():
         mock_agent.run.assert_called_once_with("Test task")
 
 
+def test_mini_forwards_mcp_http_config_to_model():
+    with (
+        patch("minisweagent.run.mini.configure_if_first_time"),
+        patch("minisweagent.run.mini.get_agent") as mock_get_agent,
+        patch("minisweagent.run.mini.get_model") as mock_get_model,
+        patch("minisweagent.run.mini.get_environment") as mock_get_env,
+        patch("minisweagent.run.mini.get_config_from_spec") as mock_get_config,
+        patch("minisweagent.run.mini.MCPRouterEnvironment") as mock_mcp_router,
+    ):
+        mock_model = Mock()
+        mock_get_model.return_value = mock_model
+        base_environment = Mock()
+        mock_get_env.return_value = base_environment
+        wrapped_environment = Mock()
+        mock_mcp_router.return_value = wrapped_environment
+        mock_get_config.return_value = {"agent": {"system_template": "test"}, "env": {}, "model": {}}
+
+        mock_agent = Mock()
+        mock_agent.run.return_value = {"exit_status": "Success", "submission": "Result"}
+        mock_get_agent.return_value = mock_agent
+
+        main(
+            config_spec=[str(DEFAULT_CONFIG_FILE)],
+            model_name="test-model",
+            task="Test task",
+            yolo=False,
+            output=None,
+            model_class="litellm",
+            agent_class=None,
+            environment_class=None,
+            mcp_http_config=Path("/tmp/mcp.yaml"),
+        )
+
+        assert mock_get_model.call_args.kwargs["config"]["mcp_http_config"] == "/tmp/mcp.yaml"
+        mock_mcp_router.assert_called_once_with(base_environment)
+        args, _ = mock_get_agent.call_args
+        assert args[1] == wrapped_environment
+
+
 def test_mini_calls_prompt_when_no_task_provided():
     """Test that mini calls prompt when no task is provided."""
     with (

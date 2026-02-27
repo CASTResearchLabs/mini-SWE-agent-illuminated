@@ -43,6 +43,36 @@ class TestParseToolcallActions:
         assert result[0] == {"command": "cmd0", "tool_call_id": "call_0"}
         assert result[2] == {"command": "cmd2", "tool_call_id": "call_2"}
 
+    def test_valid_mcp_tool_call(self):
+        tool_call = MagicMock()
+        tool_call.function.name = "mcp__docs__search"
+        tool_call.function.arguments = '{"query": "hello"}'
+        tool_call.id = "call_mcp"
+        mapping = {
+            "mcp__docs__search": {
+                "type": "mcp",
+                "mcp_server": "docs",
+                "mcp_url": "http://localhost:8000/mcp",
+                "mcp_headers": {},
+                "mcp_tool": "search",
+            }
+        }
+        assert parse_toolcall_actions(
+            [tool_call],
+            format_error_template="{{ error }}",
+            action_tool_mapping=mapping,
+        ) == [
+            {
+                "type": "mcp",
+                "mcp_server": "docs",
+                "mcp_url": "http://localhost:8000/mcp",
+                "mcp_headers": {},
+                "mcp_tool": "search",
+                "arguments": {"query": "hello"},
+                "tool_call_id": "call_mcp",
+            }
+        ]
+
     def test_unknown_tool_raises_format_error(self):
         tool_call = MagicMock()
         tool_call.function.name = "unknown_tool"

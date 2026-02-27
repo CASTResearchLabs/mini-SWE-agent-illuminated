@@ -27,7 +27,12 @@ BASH_TOOL = {
 }
 
 
-def parse_toolcall_actions(tool_calls: list, *, format_error_template: str) -> list[dict]:
+def parse_toolcall_actions(
+    tool_calls: list,
+    *,
+    format_error_template: str,
+    action_tool_mapping: dict[str, dict] | None = None,
+) -> list[dict]:
     """Parse tool calls from the response. Raises FormatError if unknown tool or invalid args."""
     if not tool_calls:
         raise FormatError(
@@ -44,25 +49,60 @@ def parse_toolcall_actions(tool_calls: list, *, format_error_template: str) -> l
     for tool_call in tool_calls:
         error_msg = ""
         args = {}
+        tool_name = tool_call.function.name
         try:
             args = json.loads(tool_call.function.arguments)
         except Exception as e:
             error_msg = f"Error parsing tool call arguments: {e}."
-        if tool_call.function.name != "bash":
-            error_msg += f"Unknown tool '{tool_call.function.name}'."
-        if not isinstance(args, dict) or "command" not in args:
-            error_msg += "Missing 'command' argument in bash tool call."
-        if error_msg:
-            raise FormatError(
+
+        if tool_name == "bash":
+            if not isinstance(args, dict) or "command" not in args:
+                error_msg += "Missing 'command' argument in bash tool call."
+            if error_msg:
+                raise FormatError(
+                    {
+                        "role": "user",
+                        "content": Template(format_error_template, undefined=StrictUndefined).render(
+                            actions=[], error=error_msg.strip()
+                        ),
+                        "extra": {"interrupt_type": "FormatError"},
+                    }
+                )
+            actions.append({"command": args["command"], "tool_call_id": tool_call.id})
+            continue
+
+        if action_tool_mapping and tool_name in action_tool_mapping:
+            if not isinstance(args, dict):
+                error_msg += "MCP tool arguments must be a JSON object."
+            if error_msg:
+                raise FormatError(
+                    {
+                        "role": "user",
+                        "content": Template(format_error_template, undefined=StrictUndefined).render(
+                            actions=[], error=error_msg.strip()
+                        ),
+                        "extra": {"interrupt_type": "FormatError"},
+                    }
+                )
+            actions.append(
                 {
-                    "role": "user",
-                    "content": Template(format_error_template, undefined=StrictUndefined).render(
-                        actions=[], error=error_msg.strip()
-                    ),
-                    "extra": {"interrupt_type": "FormatError"},
+                    **action_tool_mapping[tool_name],
+                    "arguments": args,
+                    "tool_call_id": tool_call.id,
                 }
             )
-        actions.append({"command": args["command"], "tool_call_id": tool_call.id})
+            continue
+
+        error_msg += f"Unknown tool '{tool_name}'."
+        raise FormatError(
+            {
+                "role": "user",
+                "content": Template(format_error_template, undefined=StrictUndefined).render(
+                    actions=[], error=error_msg.strip()
+                ),
+                "extra": {"interrupt_type": "FormatError"},
+            }
+        )
     return actions
 
 

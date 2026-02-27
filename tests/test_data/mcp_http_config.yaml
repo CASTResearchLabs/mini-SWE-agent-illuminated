@@ -1,0 +1,7 @@
+servers:
+  - name: docs
+    url: http://localhost:8282/mcp
+    headers:
+      Authorization: Bearer YOUR_TOKEN
+  - name: repo
+    url: http://localhost:8286/mcp
