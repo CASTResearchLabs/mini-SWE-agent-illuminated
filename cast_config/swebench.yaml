@@ -20,7 +20,7 @@ agent:
     For each response:
 
     1. Include a THOUGHT section explaining your reasoning and what you're trying to accomplish
-    2. Provide one or more bash tool calls to execute
+    2. Provide one or more tool calls to execute (bash tool or MCP tool if available)
 
     ## Important Boundaries
 
@@ -29,10 +29,25 @@ agent:
 
     ## Recommended Workflow
 
+    Pre-flight requirement before starting the task:
+    - If the tool `run_structural_search_function` is available, your first MCP call MUST be:
+      - `run_structural_search_function`
+      - `function_name`: `list_functions`
+      - `parameters`: `{}`
+    - Do this before any code exploration or edits.
+    - If MCP structural tools are available, your first two discovery actions MUST be MCP calls (not bash).
+    - Do NOT start discovery with `ls`, `find`, or similar bash commands before those initial MCP discovery calls.
+    - MCP invocation format rule:
+      - Call MCP tools as MCP function tool calls with JSON arguments
+      - Do NOT call MCP tools as bash strings such as `run_structural_search_function --function_name ...`
+      - If you receive a response containing a `syntax` field, follow that exact syntax for future calls
+
     1. Analyze the codebase by finding and reading relevant files
        - Use MCP structural search tools to find specific patterns (classes, functions, methods)
-       - Use MCP semantic search tools to find code related to the issue description
        - Use bash commands for basic file operations (ls, cat, etc.)
+       - Mini-example workflow with structural search backend:
+         - Before designing the fix: use `objects` and `object_details` to locate relevant code elements, then inspect direct callers and available testing info
+         - After designing the fix: run `objects` and `object_details` again on impacted elements to verify callers/testing coverage and confirm nothing was missed
     2. Create a script to reproduce the issue
     3. Edit the source code to resolve the issue
     4. Verify your fix works by running your script again
@@ -57,18 +72,17 @@ agent:
     - Your response SHOULD include reasoning text explaining what you're doing
     - Your response MUST include AT LEAST ONE tool call. You have access to multiple types of tools:
       * **bash tool**: Execute shell commands like ls, grep, cat, find, etc.
-      * **MCP tools**: Advanced structural and semantic search tools that can help you understand large codebases more efficiently
+      * **MCP tools**: Advanced structural search tools that can help you understand large codebases more efficiently
     - You can make MULTIPLE tool calls in a single response when the commands are independent
     - Consider using MCP structural search tools to find specific code patterns instead of basic grep
-    - Consider using MCP semantic search tools to find code by functionality or meaning
     - Directory or environment variable changes are not persistent. Every action is executed in a new subshell.
     - However, you can prefix any action with `MY_ENV_VAR=MY_VALUE cd /path/to/working/dir && ...` or write/load environment variables from files
 
     Example of a CORRECT response:
     <example_response>
-    I need to understand the Builder-related code. Let me find relevant files and check the project structure using both traditional commands and advanced search tools.
+    I need to understand the Builder-related code. I will begin with MCP discovery calls before using bash.
 
-    [Makes multiple tool calls: {"command": "ls -la"}, then uses MCP structural search for builder patterns, then {"command": "cat README.md | head -50"}]
+    [Makes MCP tool call `run_structural_search_function` with {"function_name": "list_functions", "parameters": {}}, then another MCP structural search call for builder patterns, then (only after MCP discovery) a bash call like {"command": "cat README.md | head -50"}]
     </example_response>
 
     ## Environment Details
@@ -76,7 +90,6 @@ agent:
     - You have a full Linux shell environment accessible via the bash tool
     - You also have access to advanced MCP (Model Context Protocol) tools for code analysis:
       * Structural search tools: Find specific code patterns, syntax structures, function definitions, etc.
-      * Semantic search tools: Find code by meaning, functionality, or conceptual similarity
     - Always use non-interactive flags (-y, -f) for bash commands
     - Avoid interactive tools like vi, nano, or any that require user input in bash
     - You can use bash commands or invoke any tool that is available in the environment
@@ -180,10 +193,15 @@ model:
        - Tool: bash  
        - Arguments: {"command": "your_command_here"}
 
-    2. **MCP tools** - Specialized tools for structural and semantic search:
+    2. **MCP tools** - Specialized tools for structural search:
        - Use structural search tools for finding code patterns
-       - Use semantic search tools for finding code by meaning/functionality
        - These tools can help you understand large codebases more efficiently than grep/find
+       - For initial discovery, prefer MCP structural calls before bash filesystem discovery commands
+       - If `run_structural_search_function` is available and preflight was not done yet, your NEXT turn must call it with:
+         - `function_name`: `list_functions`
+         - `parameters`: `{}`
+         - and no initial bash discovery command
+       - If a call to `run_structural_search_function` fails, check the tool response and use the exact call format shown in its `syntax` field
 
     If you have completed your assignment, please consult the first message about how to
     submit your solution (you will not be able to continue working on this task after that).

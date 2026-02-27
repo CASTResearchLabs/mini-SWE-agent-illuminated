@@ -38,7 +38,7 @@ def parse_toolcall_actions(
     action_tool_mapping: dict[str, dict] | None = None,
 ) -> list[dict]:
     """Parse tool calls from the response. Raises FormatError if unknown tool or invalid args."""
-    logger.info(f"Parsing tool calls. Received {len(tool_calls)} tool calls")
+    logger.info(f"Parsing tool calls. Received {len(tool_calls or [])} tool calls")
     logger.debug(f"Tool calls: {tool_calls}")
     
     if not tool_calls:
@@ -69,6 +69,27 @@ def parse_toolcall_actions(
         if tool_name == "bash":
             if not isinstance(args, dict) or "command" not in args:
                 error_msg += "Missing 'command' argument in bash tool call."
+            command = args.get("command", "") if isinstance(args, dict) else ""
+            if action_tool_mapping and isinstance(command, str):
+                command = command.strip()
+                mcp_openai_tool_names = {name for name in action_tool_mapping.keys() if name}
+                mcp_backend_tool_names = {
+                    str(meta.get("mcp_tool", "")) for meta in action_tool_mapping.values() if meta.get("mcp_tool")
+                }
+                mcp_names = mcp_openai_tool_names | mcp_backend_tool_names
+                matched_mcp_name = next(
+                    (name for name in mcp_names if command == name or command.startswith(f"{name} ")),
+                    "",
+                )
+                if matched_mcp_name:
+                    error_msg += (
+                        "MCP tool call detected inside bash command. "
+                        "Do not run MCP tools via shell syntax. "
+                        f"Call the MCP function tool '{matched_mcp_name}' directly with JSON arguments. "
+                        "For run_structural_search_function use arguments like "
+                        "{'function_name': 'list_functions', 'parameters': {}}. "
+                        "If available, use the exact syntax from the tool response 'syntax' field."
+                    )
             if error_msg:
                 logger.error(f"Bash tool error: {error_msg}")
                 raise FormatError(

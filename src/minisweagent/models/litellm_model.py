@@ -17,7 +17,7 @@ from minisweagent.models.utils.actions_toolcall import (
 )
 from minisweagent.models.utils.anthropic_utils import _reorder_anthropic_thinking_blocks
 from minisweagent.models.utils.cache_control import set_cache_control
-from minisweagent.models.utils.mcp_http_tools import build_mcp_openai_tools
+from minisweagent.models.utils.mcp_http_tools import build_mcp_openai_tools, invoke_mcp_action
 from minisweagent.models.utils.openai_multimodal import expand_multimodal_content
 from minisweagent.models.utils.retry import retry
 
@@ -65,6 +65,7 @@ class LitellmModel:
         self.config = config_class(**kwargs)
         self._action_tool_mapping: dict[str, dict] = {}
         self._tools = [BASH_TOOL]
+        self._startup_mcp_capabilities_message: str | None = None
         if self.config.litellm_model_registry and Path(self.config.litellm_model_registry).is_file():
             litellm.utils.register_model(json.loads(Path(self.config.litellm_model_registry).read_text()))
         if self.config.mcp_http_config:
@@ -75,6 +76,43 @@ class LitellmModel:
             )
             self._tools += mcp_tools
             self._action_tool_mapping |= mapping
+            self._startup_mcp_capabilities_message = self._get_startup_mcp_capabilities_message()
+
+        tool_names = [tool.get("function", {}).get("name", "") for tool in self._tools]
+        logger.info(f"Tools enabled at startup ({len(tool_names)}): {tool_names}")
+
+    def _get_startup_mcp_capabilities_message(self) -> str | None:
+        structural_entries = [
+            mapping for mapping in self._action_tool_mapping.values() if mapping.get("mcp_tool") == "run_structural_search_function"
+        ]
+        if not structural_entries:
+            return None
+
+        result = invoke_mcp_action(
+            {
+                **structural_entries[0],
+                "arguments": {"function_name": "list_functions", "parameters": {}},
+            },
+            timeout=self.config.mcp_http_timeout,
+        )
+        if result.get("returncode") != 0:
+            logger.warning(
+                "Startup MCP discovery failed for run_structural_search_function(list_functions, {}): "
+                f"{result.get('exception_info') or result.get('output', '')}"
+            )
+            return None
+
+        output = str(result.get("output", "")).strip()
+        if len(output) > 6000:
+            output = output[:6000] + "\n...[truncated]"
+        logger.info("Startup MCP discovery succeeded: appended list_functions output to first prompt")
+        return (
+            "<mcp_capabilities>\n"
+            "Startup discovery result from run_structural_search_function(function_name='list_functions', parameters={}):\n"
+            f"{output}\n"
+            "Use these MCP capabilities directly as function tool calls (JSON arguments), not bash commands.\n"
+            "</mcp_capabilities>"
+        )
 
     def _query(self, messages: list[dict[str, str]], **kwargs):
         try:
@@ -94,9 +132,16 @@ class LitellmModel:
         return set_cache_control(prepared, mode=self.config.set_cache_control)
 
     def query(self, messages: list[dict[str, str]], **kwargs) -> dict:
+        messages_for_query = messages
+        if self._startup_mcp_capabilities_message:
+            messages_for_query = [
+                *messages,
+                {"role": "user", "content": self._startup_mcp_capabilities_message},
+            ]
         for attempt in retry(logger=logger, abort_exceptions=self.abort_exceptions):
             with attempt:
-                response = self._query(self._prepare_messages_for_api(messages), **kwargs)
+                response = self._query(self._prepare_messages_for_api(messages_for_query), **kwargs)
+        self._startup_mcp_capabilities_message = None
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
         message = response.choices[0].message.model_dump()
@@ -130,7 +175,7 @@ class LitellmModel:
 
     def _parse_actions(self, response) -> list[dict]:
         """Parse tool calls from the response. Raises FormatError if unknown tool."""
-        logger.info("Parsing tool calls from model response") 
+        logger.info("Parsing tool calls from model response")
         logger.debug(f"Model response: {response}")
         tool_calls = response.choices[0].message.tool_calls or []
         return parse_toolcall_actions(

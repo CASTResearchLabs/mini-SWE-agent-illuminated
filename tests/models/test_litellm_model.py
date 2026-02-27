@@ -76,3 +76,72 @@ class TestLitellmModel:
         model = LitellmModel(model_name="gpt-4")
         result = model.format_observation_messages({"extra": {}}, [])
         assert result == []
+
+    @patch("minisweagent.models.litellm_model.invoke_mcp_action")
+    @patch("minisweagent.models.litellm_model.build_mcp_openai_tools")
+    @patch("minisweagent.models.litellm_model.litellm.completion")
+    @patch("minisweagent.models.litellm_model.litellm.cost_calculator.completion_cost")
+    def test_discovery_failure_does_not_block_bash(
+        self, mock_cost, mock_completion, mock_build_mcp_tools, mock_invoke_mcp_action
+    ):
+        mock_build_mcp_tools.return_value = (
+            [{"type": "function", "function": {"name": "mcp__structural_search__run_structural_search_function"}}],
+            {
+                "mcp__structural_search__run_structural_search_function": {
+                    "type": "mcp",
+                    "mcp_server": "structural-search",
+                    "mcp_url": "http://localhost:8282/mcp",
+                    "mcp_headers": {},
+                    "mcp_tool": "run_structural_search_function",
+                }
+            },
+        )
+        mock_invoke_mcp_action.return_value = {"returncode": -1, "output": "", "exception_info": "failed"}
+        tool_call = MagicMock()
+        tool_call.function.name = "bash"
+        tool_call.function.arguments = '{"command": "ls /testbed"}'
+        tool_call.id = "call_1"
+        mock_completion.return_value = _mock_litellm_response([tool_call])
+        mock_cost.return_value = 0.001
+
+        model = LitellmModel(model_name="gpt-4", mcp_http_config="dummy.yaml")
+        result = model.query([{"role": "user", "content": "test"}])
+        assert result["extra"]["actions"] == [{"command": "ls /testbed", "tool_call_id": "call_1"}]
+
+    @patch("minisweagent.models.litellm_model.invoke_mcp_action")
+    @patch("minisweagent.models.litellm_model.build_mcp_openai_tools")
+    @patch("minisweagent.models.litellm_model.litellm.completion")
+    @patch("minisweagent.models.litellm_model.litellm.cost_calculator.completion_cost")
+    def test_startup_discovery_is_injected_once(
+        self, mock_cost, mock_completion, mock_build_mcp_tools, mock_invoke_mcp_action
+    ):
+        mock_build_mcp_tools.return_value = (
+            [{"type": "function", "function": {"name": "mcp__structural_search__run_structural_search_function"}}],
+            {
+                "mcp__structural_search__run_structural_search_function": {
+                    "type": "mcp",
+                    "mcp_server": "structural-search",
+                    "mcp_url": "http://localhost:8282/mcp",
+                    "mcp_headers": {},
+                    "mcp_tool": "run_structural_search_function",
+                }
+            },
+        )
+        mock_invoke_mcp_action.return_value = {"returncode": 0, "output": "f1\nf2", "exception_info": ""}
+
+        tool_call = MagicMock()
+        tool_call.function.name = "bash"
+        tool_call.function.arguments = '{"command": "ls /testbed"}'
+        tool_call.id = "call_bash"
+        mock_completion.side_effect = [_mock_litellm_response([tool_call]), _mock_litellm_response([tool_call])]
+        mock_cost.return_value = 0.001
+
+        model = LitellmModel(model_name="gpt-4", mcp_http_config="dummy.yaml")
+        model.query([{"role": "user", "content": "test"}])
+        model.query([{"role": "user", "content": "test"}])
+
+        first_messages = mock_completion.call_args_list[0].kwargs["messages"]
+        second_messages = mock_completion.call_args_list[1].kwargs["messages"]
+        assert first_messages[-1]["role"] == "user"
+        assert "<mcp_capabilities>" in first_messages[-1]["content"]
+        assert second_messages == [{"role": "user", "content": "test"}]

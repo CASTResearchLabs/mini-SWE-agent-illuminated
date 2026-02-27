@@ -100,6 +100,24 @@ class TestParseToolcallActions:
             parse_toolcall_actions([tool_call], format_error_template="{{ error }}")
         assert "Missing 'command' argument" in exc_info.value.messages[0]["content"]
 
+    def test_mcp_style_shell_command_raises_format_error(self):
+        tool_call = MagicMock()
+        tool_call.function.name = "bash"
+        tool_call.function.arguments = '{"command": "run_structural_search_function --function_name list_functions --parameters {}"}'
+        tool_call.id = "call_1"
+        mapping = {
+            "mcp__structural_search__run_structural_search_function": {
+                "type": "mcp",
+                "mcp_server": "structural-search",
+                "mcp_url": "http://localhost:8282/mcp",
+                "mcp_headers": {},
+                "mcp_tool": "run_structural_search_function",
+            }
+        }
+        with pytest.raises(FormatError) as exc_info:
+            parse_toolcall_actions([tool_call], format_error_template="{{ error }}", action_tool_mapping=mapping)
+        assert "MCP tool call detected inside bash command" in exc_info.value.messages[0]["content"]
+
 
 class TestFormatToolcallObservationMessages:
     def test_basic_formatting(self):
