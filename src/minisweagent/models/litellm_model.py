@@ -91,7 +91,7 @@ class LitellmModel:
         result = invoke_mcp_action(
             {
                 **structural_entries[0],
-                "arguments": {"function_name": "list_functions", "parameters": {}},
+                "arguments": {"function_name": "get_guidelines", "arguments": {"name":"change_impact_assessment"}},
             },
             timeout=self.config.mcp_http_timeout,
         )
@@ -141,12 +141,42 @@ class LitellmModel:
         for attempt in retry(logger=logger, abort_exceptions=self.abort_exceptions):
             with attempt:
                 response = self._query(self._prepare_messages_for_api(messages_for_query), **kwargs)
+        
         self._startup_mcp_capabilities_message = None
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
+        
         message = response.choices[0].message.model_dump()
+        
+        # Log the model response content BEFORE trying to parse actions
+        content = message.get("content", "")
+        tool_calls = message.get("tool_calls") or []  # Handle None case
+        
+        content_length = len(content) if content else 0
+        tool_calls_length = len(tool_calls) if tool_calls else 0
+        
+        logger.info(f"Model response received: content_length={content_length}, tool_calls={tool_calls_length}")
+        
+        if content:
+            logger.debug(f"Model content (first 500 chars): {content[:500]}...")
+        
+        if not tool_calls:
+            logger.warning("🚨 Model provided content but NO TOOL CALLS - this will trigger FormatError")
+            if content:
+                logger.info(f"Full model response content:\n{content}")
+            else:
+                logger.info("Model response had no content and no tool calls")
+        
+        # Now try to parse actions (this may raise FormatError)
+        try:
+            actions = self._parse_actions(response)
+        except Exception as e:
+            logger.error(f"Failed to parse actions from model response: {type(e).__name__}: {e}")
+            logger.error(f"Model response that failed to parse:\nContent: {content}\nTool calls: {tool_calls}")
+            raise
+        
         message["extra"] = {
-            "actions": self._parse_actions(response),
+            "actions": actions,
             "response": response.model_dump(),
             **cost_output,
             "timestamp": time.time(),
@@ -177,12 +207,36 @@ class LitellmModel:
         """Parse tool calls from the response. Raises FormatError if unknown tool."""
         logger.info("Parsing tool calls from model response")
         logger.debug(f"Model response: {response}")
+        
         tool_calls = response.choices[0].message.tool_calls or []
-        return parse_toolcall_actions(
-            tool_calls,
-            format_error_template=self.config.format_error_template,
-            action_tool_mapping=self._action_tool_mapping,
-        )
+        logger.info(f"Found {len(tool_calls)} tool calls in response")
+        
+        if not tool_calls:
+            logger.warning("⚠️  ZERO tool calls detected - this will cause FormatError")
+            
+            # Log additional debugging information
+            message = response.choices[0].message
+            content = getattr(message, 'content', None)
+            logger.warning(f"Message content: {content[:500] if content else 'None'}...")
+            
+            # Check if there are any function calls in a different format
+            if hasattr(message, 'function_call'):
+                logger.debug(f"Function call (deprecated format): {message.function_call}")
+            
+            # Log the full message structure for debugging
+            logger.debug(f"Full message structure: {message}")
+        
+        try:
+            parsed_actions = parse_toolcall_actions(
+                tool_calls,
+                format_error_template=self.config.format_error_template,
+                action_tool_mapping=self._action_tool_mapping,
+            )
+            logger.info(f"Successfully parsed {len(parsed_actions)} actions")
+            return parsed_actions
+        except Exception as e:
+            logger.error(f"Failed to parse tool calls: {type(e).__name__}: {e}")
+            raise
 
     def format_message(self, **kwargs) -> dict:
         return expand_multimodal_content(kwargs, pattern=self.config.multimodal_regex)

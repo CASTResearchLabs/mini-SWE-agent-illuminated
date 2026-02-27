@@ -42,12 +42,26 @@ def parse_toolcall_actions(
     logger.debug(f"Tool calls: {tool_calls}")
     
     if not tool_calls:
-        logger.error("No tool calls found in the response")
+        logger.error("🚨 CRITICAL: No tool calls found in the response")
+        logger.error("This indicates the model generated a response without using any tools")
+        logger.error("This will result in a FormatError and waste a turn")
+        
+        # Log available tools for debugging
+        if action_tool_mapping:
+            available_tools = list(action_tool_mapping.keys()) + ["bash"]
+            logger.debug(f"Available tools were: {available_tools}")
+        else:
+            logger.debug("Available tools: bash (MCP tools not configured)")
+        
+        # Create detailed error message
+        error_msg = "No tool calls found in the response. Every response MUST include at least one tool call."
+        logger.error(f"Raising FormatError: {error_msg}")
+        
         raise FormatError(
             {
                 "role": "user",
                 "content": Template(format_error_template, undefined=StrictUndefined).render(
-                    error="No tool calls found in the response. Every response MUST include at least one tool call.",
+                    error=error_msg,
                     actions=[],
                 ),
                 "extra": {"interrupt_type": "FormatError"},

@@ -18,9 +18,13 @@ import dotenv
 from platformdirs import user_config_dir
 from rich.console import Console
 
-from minisweagent.utils.log import logger
+from minisweagent.utils.log import logger, setup_debug_logging
 
 package_dir = Path(__file__).resolve().parent
+
+# Auto-enable debug logging if environment variable is set
+if os.getenv("MSWEA_DEBUG_LOGGING"):
+    setup_debug_logging()
 
 
 global_config_dir = Path(os.getenv("MSWEA_GLOBAL_CONFIG_DIR") or user_config_dir("mini-swe-agent"))

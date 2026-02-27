@@ -19,6 +19,7 @@ from minisweagent.environments import get_environment
 from minisweagent.environments.extra.mcp_router import MCPRouterEnvironment
 from minisweagent.models import get_model
 from minisweagent.run.utilities.config import configure_if_first_time
+from minisweagent.utils.log import setup_debug_logging
 from minisweagent.utils.serialize import UNSET, recursive_merge
 
 DEFAULT_CONFIG_FILE = Path(os.getenv("MSWEA_MINI_CONFIG_PATH", builtin_config_dir / "mini.yaml"))
@@ -65,10 +66,17 @@ def main(
     config_spec: list[str] = typer.Option([str(DEFAULT_CONFIG_FILE)], "-c", "--config", help=_CONFIG_SPEC_HELP_TEXT),
     output: Path | None = typer.Option(DEFAULT_OUTPUT_FILE, "-o", "--output", help="Output trajectory file"),
     mcp_http_config: Path | None = typer.Option(None, "--mcp-http-config", help="Path to MCP Streamable-HTTP server config file"),
+    debug_logging: bool = typer.Option(False, "--debug", help="Enable enhanced debug logging to help troubleshoot issues like wasted turns", rich_help_panel="Advanced"),
     exit_immediately: bool = typer.Option(False, "--exit-immediately", help="Exit immediately when the agent wants to finish instead of prompting.", rich_help_panel="Advanced"),
 ) -> Any:
     # fmt: on
     configure_if_first_time()
+    
+    # Set up debug logging if requested
+    if debug_logging:
+        setup_debug_logging()
+        console.print("[yellow]Enhanced debug logging enabled - logs will be written to logs/miniswe_debug.log[/yellow]")
+    
     resolved_mcp_http_config = None if isinstance(mcp_http_config, OptionInfo) else mcp_http_config
 
     # Build the config from the command line arguments

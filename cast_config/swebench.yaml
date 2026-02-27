@@ -30,10 +30,9 @@ agent:
     ## Recommended Workflow
 
     Pre-flight requirement before starting the task:
-    - If the tool `run_structural_search_function` is available, your first MCP call MUST be:
-      - `run_structural_search_function`
-      - `function_name`: `list_functions`
-      - `parameters`: `{}`
+    - If the MCP tool `run_structural_search_function` is available, your first MCP call MUST be:
+      - `run_structural_search_function` MCP tool 
+      - with {'function_name': 'list_functions', 'arguments': {}} MCP arguments (ALWAYS use the `arguments` even if set to an empty dictionary)
     - Do this before any code exploration or edits.
     - If MCP structural tools are available, your first two discovery actions MUST be MCP calls (not bash).
     - Do NOT start discovery with `ls`, `find`, or similar bash commands before those initial MCP discovery calls.
@@ -43,7 +42,7 @@ agent:
       - If you receive a response containing a `syntax` field, follow that exact syntax for future calls
 
     1. Analyze the codebase by finding and reading relevant files
-       - Use MCP structural search tools to find specific patterns (classes, functions, methods)
+       - Use MCP structural search tools to find specific patterns (classes, functions, methods, callers, callees, etc.)
        - Use bash commands for basic file operations (ls, cat, etc.)
        - Mini-example workflow with structural search backend:
          - Before designing the fix: use `objects` and `object_details` to locate relevant code elements, then inspect direct callers and available testing info
@@ -82,7 +81,7 @@ agent:
     <example_response>
     I need to understand the Builder-related code. I will begin with MCP discovery calls before using bash.
 
-    [Makes MCP tool call `run_structural_search_function` with {"function_name": "list_functions", "parameters": {}}, then another MCP structural search call for builder patterns, then (only after MCP discovery) a bash call like {"command": "cat README.md | head -50"}]
+    [Makes MCP tool call `run_structural_search_function` MCP tool with {"function_name": "list_functions", "arguments": {}} MCP arguments (ALWAYS use the `arguments` even if set to an empty dictionary), then another MCP structural search call for builder methods such as a call to `run_structural_search_function` MCP tool with {"function_name": "objects", "arguments": {"filters":"name:contains:builder,type:contains:method"}} MCP arguments (ALWAYS use the `arguments` even if set to an empty dictionary), then (only after MCP discovery) a bash call like {"command": "cat README.md | head -50"}]
     </example_response>
 
     ## Environment Details
@@ -198,10 +197,11 @@ model:
        - These tools can help you understand large codebases more efficiently than grep/find
        - For initial discovery, prefer MCP structural calls before bash filesystem discovery commands
        - If `run_structural_search_function` is available and preflight was not done yet, your NEXT turn must call it with:
-         - `function_name`: `list_functions`
-         - `parameters`: `{}`
-         - and no initial bash discovery command
+         - `run_structural_search_function` MCP tool call 
+         - with {'function_name': 'list_functions', 'arguments': {}} MCP arguments (ALWAYS use the `arguments` even if set to an empty dictionary)
+         - that is, no initial bash discovery command
        - If a call to `run_structural_search_function` fails, check the tool response and use the exact call format shown in its `syntax` field
+       - More generally speaking, call the `get_structural_search_function_syntax` tool with the list of structural search functions you want to use if you're unsure about the correct syntax for calling them
 
     If you have completed your assignment, please consult the first message about how to
     submit your solution (you will not be able to continue working on this task after that).
