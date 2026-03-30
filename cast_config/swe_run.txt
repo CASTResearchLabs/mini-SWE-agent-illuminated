@@ -5,6 +5,6 @@ mini-e swebench \
   --config ./cast_config/swebench.yaml \
   --config agent.per_instance_cost_limit=1.0 \
   --model-class litellm \
-  --model openai/gpt-4o \
+  --model gemini/gemini-2.5-flash \
   --output enterprise/openmrs01 \
   --redo-existing

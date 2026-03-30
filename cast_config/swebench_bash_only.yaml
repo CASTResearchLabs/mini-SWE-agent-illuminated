@@ -1,0 +1,197 @@
+agent:
+  system_template: |
+    You are an expert software engineer with deep experience debugging and fixing code across many languages and frameworks.
+  instance_template: |
+    <pr_description>
+    Consider the following PR description:
+    {{task}}
+    </pr_description>
+
+    <instructions>
+    # Task Instructions
+
+    ## Overview
+
+    You are a software engineer working directly in a shell environment.
+    Your goal is to fix the issue described in the PR description by modifying source files in /testbed.
+    Your fix must be general, minimal, and consistent with the existing codebase style.
+
+    <IMPORTANT>This is an interactive process: think, issue AT LEAST ONE command, observe the result, then continue.</IMPORTANT>
+
+    ## Important Boundaries
+
+    - MODIFY: Regular source code files in /testbed
+    - DO NOT MODIFY: Test files, configuration files (pyproject.toml, setup.cfg, pom.xml, etc.)
+
+    ## Recommended Workflow
+
+    ### Phase 1: Codebase Discovery
+
+    Read the PR description carefully, then map the codebase **before** writing any code:
+
+    ```bash
+    # Understand the project layout
+    find /testbed -maxdepth 3 -type f | head -60
+
+    # Find the symbol(s) mentioned in the description
+    grep -rn "ClassName\|method_name" /testbed/src --include="*.java" -l
+    grep -rn "def symbol\|class Symbol" /testbed/src --include="*.py" -l
+
+    # Trace callers to understand impact
+    grep -rn "symbol(" /testbed/src --include="*.py"
+
+    # Read the relevant file around the area of interest
+    sed -n '40,80p' /testbed/path/to/file.py
+
+    # Check git history for context
+    git -C /testbed log --oneline -10 -- path/to/file
+    git -C /testbed show <commit>:path/to/file | head -50
+    ```
+
+    Redirect large outputs to avoid truncation:
+    ```bash
+    find /testbed -name "*.java" > /tmp/files.txt && wc -l /tmp/files.txt && head -30 /tmp/files.txt
+    grep -rn "keyword" /testbed/src > /tmp/results.txt && wc -l /tmp/results.txt && head -40 /tmp/results.txt
+    ```
+
+    ### Phase 2: Impact Analysis
+
+    Before writing any fix, trace the full dependency chain:
+    - Identify all callers of the affected method/class
+    - Check for subclasses or interface implementations
+    - Note configuration files that reference the affected component
+    - Assess what tests cover the affected code path
+
+    ```bash
+    # Find all callers
+    grep -rn "method_name\b" /testbed/src
+
+    # Find subclasses / implementations
+    grep -rn "extends ClassName\|implements Interface" /testbed/src
+
+    # Find related tests
+    find /testbed -path "*/test*" -name "*.py" | xargs grep -l "ClassName" 2>/dev/null
+    ```
+
+    ### Phase 3: Implementation
+
+    Make the smallest change that correctly addresses the root cause:
+    - Do not refactor surrounding code or fix unrelated issues
+    - Prefer editing existing files over creating new ones
+    - Avoid interactive editors — use `sed -i`, `awk`, or heredocs
+
+    ### Phase 4: Verification
+
+    Re-run your reproduction script or relevant tests:
+    ```bash
+    # Run a specific test file
+    cd /testbed && python -m pytest tests/test_file.py -v 2>&1 | tail -30
+
+    # Or for Java/Maven
+    cd /testbed && mvn test -pl module -Dtest=TestClass -q 2>&1 | tail -30
+    ```
+    Confirm your change does not break adjacent code paths by checking callers identified in Phase 2.
+
+    ## Submission
+
+    When your fix is complete, submit it as a git patch. Follow these steps IN ORDER with SEPARATE commands:
+
+    **Step 1: Stage and create the patch**
+    ```bash
+    git -C /testbed add path/to/file1 path/to/file2
+    git -C /testbed diff --cached -- path/to/file1 path/to/file2 > /testbed/patch.txt
+    ```
+    List only the source files you modified. Do NOT commit.
+
+    <IMPORTANT>
+    The patch must only contain changes to the source files you modified to fix the issue.
+    Exclude from the patch:
+    - Test and reproduction scripts you created
+    - Configuration or build files (unless they are the direct subject of the fix)
+    - Binary or compiled files
+    </IMPORTANT>
+
+    **Step 2: Verify the patch**
+    ```bash
+    cat /testbed/patch.txt
+    ```
+    Confirm it contains only your intended changes and that headers show `--- a/` and `+++ b/` paths.
+    If the patch is empty, you likely patched an untracked file — re-check with `git -C /testbed status`.
+
+    **Step 3: Submit (EXACT command required)**
+    ```bash
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat /testbed/patch.txt
+    ```
+
+    <CRITICAL>
+    - Steps 1, 2, and 3 MUST be separate commands (do not chain them with &&).
+    - You CANNOT continue working after submitting.
+    - If patch.txt is empty, do NOT submit — diagnose and fix the staging step first.
+    </CRITICAL>
+    </instructions>
+  step_limit: 250
+  cost_limit: 3.
+
+environment:
+  cwd: "/testbed"
+  # run_args: []
+  timeout: 60
+  interpreter: ["bash", "-c"]
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: "off"
+    TQDM_DISABLE: "1"
+  environment_class: docker
+
+model:
+  observation_template: |
+    {% if output.exception_info -%}
+    <exception>{{output.exception_info}}</exception>
+    {% endif -%}
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a different command that produces less output.
+    If you're looking at a file you can try use head, tail or sed to view a smaller number of lines selectively.
+    If you're using grep or find and it produced too much output, you can use a more selective search pattern.
+    If you really need to see something from the full output, redirect it to a file and then search within it.
+    </warning>
+    {%- set elided_chars = output.output | length - 100000 -%}
+    <output_head>
+    {{ output.output[:50000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-50000:] }}
+    </output_tail>
+    {%- endif -%}
+  format_error_template: |
+    Tool call error:
+
+    <error>
+    {{error}}
+    </error>
+
+    Every response must include at least one tool call. You have access to:
+
+    1. **bash tool** - Execute shell commands:
+       - Tool: bash
+       - Arguments: {"command": "your_command_here"}
+
+    If you have completed your fix, follow the submission instructions in the first message
+    (you will not be able to continue working after submitting).
+  model_name: "anthropic/claude-sonnet-4-5-20250929"
+  model_kwargs:
+    drop_params: true
+    temperature: 0.0
+    parallel_tool_calls: true
+  image: cast0research0labs/mini-swe-agent:latest

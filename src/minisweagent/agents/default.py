@@ -45,6 +45,8 @@ class DefaultAgent:
         self.logger = logging.getLogger("agent")
         self.cost = 0.0
         self.n_calls = 0
+        self.tokens_sent = 0
+        self.tokens_received = 0
         self.format_error_count = 0  # Track wasted turns
 
         if not self.logger.handlers:
@@ -240,8 +242,11 @@ class DefaultAgent:
             
             raise
         
-        call_cost = message.get("extra", {}).get("cost", 0.0)
+        extra = message.get("extra", {})
+        call_cost = extra.get("cost", 0.0)
         self.cost += call_cost
+        self.tokens_sent += extra.get("prompt_tokens", 0)
+        self.tokens_received += extra.get("completion_tokens", 0)
         
         # Log detailed information about the model response
         actions = message.get("extra", {}).get("actions", [])
@@ -292,6 +297,8 @@ class DefaultAgent:
                 "model_stats": {
                     "instance_cost": self.cost,
                     "api_calls": self.n_calls,
+                    "tokens_sent": self.tokens_sent,
+                    "tokens_received": self.tokens_received,
                 },
                 "config": {
                     "agent": self.config.model_dump(mode="json"),

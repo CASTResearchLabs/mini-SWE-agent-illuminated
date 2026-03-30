@@ -29,81 +29,88 @@ agent:
 
     ## Recommended Workflow
 
-    Pre-flight requirement before starting the task:
-    - If the MCP tool `run_structural_search_function` is available, your first MCP call MUST be:
-      - `run_structural_search_function` MCP tool 
-      - with {'function_name': 'list_functions', 'arguments': {}} MCP arguments (ALWAYS use the `arguments` even if set to an empty dictionary)
-    - Do this before any code exploration or edits.
-    - If MCP structural tools are available, your first two discovery actions MUST be MCP calls (not bash).
-    - Do NOT start discovery with `ls`, `find`, or similar bash commands before those initial MCP discovery calls.
-    - MCP invocation format rule:
-      - Call MCP tools as MCP function tool calls with JSON arguments
-      - Do NOT call MCP tools as bash strings such as `run_structural_search_function --function_name ...`
-      - If you receive a response containing a `syntax` field, follow that exact syntax for future calls
+    ### Phase 1: Structural Discovery (MCP) — ordered tool sequence
 
-    1. Analyze the codebase by finding and reading relevant files
-       - Use MCP structural search tools to find specific patterns (classes, functions, methods, callers, callees, etc.)
-       - Use bash commands for basic file operations (ls, cat, etc.)
-       - Mini-example workflow with structural search backend:
-         - Before designing the fix: use `objects` and `object_details` to locate relevant code elements, then inspect direct callers and available testing info
-         - After designing the fix: run `objects` and `object_details` again on impacted elements to verify callers/testing coverage and confirm nothing was missed
-    2. Create a script to reproduce the issue
-    3. Edit the source code to resolve the issue
-    4. Verify your fix works by running your script again
-    5. Test edge cases to ensure your fix is robust
+    **Step 1 — Pre-flight (MANDATORY first call):**
+    Call `run_structural_search_function` with `{"function_name": "list_functions", "arguments": {}}`.
+    - Do NOT start with bash exploration before this call.
+    - If you receive a `syntax` field in the response, use that exact format for all subsequent calls.
+
+    **Step 2 — Safe architectural overview (start small, then grow):**
+    Follow this sequence — each step only if the previous succeeded:
+    1. `stats` — smallest response, confirms connectivity
+    2. `architectural_graph` — layer distribution and coupling
+    3. `transactions` with `{"items_per_page": 30}` — entry points, paginate if needed
+    4. `objects` with `{"items_per_page": 40}` — code elements, paginate if needed
+    5. `quality_insights` with `{"items_per_page": 20}` — ALWAYS use this limit; default returns 100+ items which exceeds the response size limit and gets truncated
+
+    **PAGINATION IS MANDATORY for large-dataset functions:**
+    - `quality_insights`: always `items_per_page: 20`
+    - `transactions`, `objects`, `advisors`: use `items_per_page: 30-50`
+    - If a response is truncated (you see `characters elided`), retry with a smaller `items_per_page` or use `page` to fetch subsequent pages
+    - Process one page at a time; do not attempt to retrieve all data in a single call
+
+    **Graceful degradation:**
+    - If 3 or more consecutive MCP calls return errors, stop attempting MCP and switch entirely to bash exploration
+    - A single failed call is not a reason to abandon MCP — retry once with reduced `items_per_page`
+
+    ### Phase 2: Targeted bash verification (complement, not substitute)
+
+    MCP structural data is the primary source of truth. Use bash only to fill specific gaps the structural model cannot expose:
+    - Field-level types and size constraints
+    - Inline constants and enumerations
+    - Handler wiring expressed purely in code logic
+    - Method signatures on interfaces not surfaced by the structural model
+
+    Do NOT run broad grep sweeps or re-derive architecture from source when MCP already provided sufficient data.
+
+    ```bash
+    # Find definition of a symbol
+    grep -rn "def symbol\|class Symbol" /testbed/src
+
+    # Inspect a range of lines
+    sed -n '40,80p' /testbed/path/to/file.py
+
+    # Redirect large output to avoid truncation
+    find /testbed -name "*.java" > /tmp/files.txt && head -30 /tmp/files.txt
+    ```
+
+    ### Phase 3: Impact analysis
+
+    Combine MCP dependency data with any source-level detail from Phase 2.
+    Use `object_details` for modification targets (inward/outward/testing focus).
+
+    ### Phase 4: Implementation
+
+    Make targeted changes informed by both MCP architectural intelligence and source detail.
+    - Make the smallest change that correctly addresses the root cause
+    - Do not refactor surrounding code or fix unrelated issues
+    - Prefer editing existing files over creating new ones
+
+    ### Phase 5: Verify
+
+    Re-run your reproduction script or relevant tests. Use MCP to confirm no impacted callers were missed.
 
     ## Command Execution Rules
 
-    You are operating in an environment where
-
-    1. You issue at least one command
-    2. The system executes the command(s) in a subshell
-    3. You see the result(s)
-    4. You write your next command(s)
-
-    Each response should include:
-
-    1. **Reasoning text** where you explain your analysis and plan
-    2. At least one tool call with your command
-
-    **CRITICAL REQUIREMENTS:**
-
-    - Your response SHOULD include reasoning text explaining what you're doing
-    - Your response MUST include AT LEAST ONE tool call. You have access to multiple types of tools:
-      * **bash tool**: Execute shell commands like ls, grep, cat, find, etc.
-      * **MCP tools**: Advanced structural search tools that can help you understand large codebases more efficiently
-    - You can make MULTIPLE tool calls in a single response when the commands are independent
-    - Consider using MCP structural search tools to find specific code patterns instead of basic grep
-    - Directory or environment variable changes are not persistent. Every action is executed in a new subshell.
-    - However, you can prefix any action with `MY_ENV_VAR=MY_VALUE cd /path/to/working/dir && ...` or write/load environment variables from files
-
-    Example of a CORRECT response:
-    <example_response>
-    I need to understand the Builder-related code. I will begin with MCP discovery calls before using bash.
-
-    [Makes MCP tool call `run_structural_search_function` MCP tool with {"function_name": "list_functions", "arguments": {}} MCP arguments (ALWAYS use the `arguments` even if set to an empty dictionary), then another MCP structural search call for builder methods such as a call to `run_structural_search_function` MCP tool with {"function_name": "objects", "arguments": {"filters":"name:contains:builder,type:contains:method"}} MCP arguments (ALWAYS use the `arguments` even if set to an empty dictionary), then (only after MCP discovery) a bash call like {"command": "cat README.md | head -50"}]
-    </example_response>
-
-    ## Environment Details
-
-    - You have a full Linux shell environment accessible via the bash tool
-    - You also have access to advanced MCP (Model Context Protocol) tools for code analysis:
-      * Structural search tools: Find specific code patterns, syntax structures, function definitions, etc.
-    - Always use non-interactive flags (-y, -f) for bash commands
-    - Avoid interactive tools like vi, nano, or any that require user input in bash
-    - You can use bash commands or invoke any tool that is available in the environment
-    - You can also create new tools or scripts to help you with the task
-    - If a tool isn't available, you can also install it
-    - Consider using MCP tools first for code exploration as they may be more efficient than grep/find for complex searches
+    - Every response MUST include at least one tool call (bash or MCP)
+    - You can make MULTIPLE tool calls in a single response when they are independent
+    - MCP tools are called as direct tool calls with JSON arguments — NOT as bash strings
+    - Shell state does not persist between bash commands — use `cd /path && command` when needed
+    - Always use non-interactive flags: `-y`, `-f`, `--yes`, `-n` where applicable
+    - Avoid interactive editors (vi, nano); use `sed -i`, `awk`, or write files with heredocs
 
     ## Submission
 
     When you've completed your work, you MUST submit your changes as a git patch.
     Follow these steps IN ORDER, with SEPARATE commands:
 
-    Step 1: Create the patch file
-    Run `git diff -- path/to/file1 path/to/file2 > patch.txt` listing only the source files you modified.
-    Do NOT commit your changes.
+    **Step 1: Stage and create the patch**
+    ```bash
+    git -C /testbed add path/to/file1 path/to/file2
+    git -C /testbed diff --cached -- path/to/file1 path/to/file2 > /testbed/patch.txt
+    ```
+    List only the source files you modified. Do NOT commit.
 
     <IMPORTANT>
     The patch must only contain changes to the specific source files you modified to fix the issue.
@@ -115,22 +122,23 @@ agent:
     - binary or compiled files
     </IMPORTANT>
 
-    Step 2: Verify your patch
-    Inspect patch.txt to confirm it only contains your intended changes and headers show `--- a/` and `+++ b/` paths.
-
-    Step 3: Submit (EXACT command required)
-    You MUST use this EXACT command to submit:
-
+    **Step 2: Verify your patch**
     ```bash
-    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt
+    cat /testbed/patch.txt
+    ```
+    Confirm it only contains your intended changes and headers show `--- a/` and `+++ b/` paths.
+    If the patch is empty, you likely patched an untracked file — re-check with `git -C /testbed status`.
+
+    **Step 3: Submit (EXACT command required)**
+    ```bash
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat /testbed/patch.txt
     ```
 
-    If the command fails (nonzero exit status), it will not submit.
-
     <CRITICAL>
-    - Creating/viewing the patch and submitting it MUST be separate commands (not combined with &&).
+    - Steps 1, 2, and 3 MUST be separate commands (do not chain them with &&).
     - If you modify patch.txt after verifying, you SHOULD verify again before submitting.
     - You CANNOT continue working (reading, editing, testing) in any way on this task after submitting.
+    - If patch.txt is empty, do NOT submit — diagnose and fix the staging step first.
     </CRITICAL>
     </instructions>
   step_limit: 250
@@ -138,6 +146,7 @@ agent:
 
 environment:
   cwd: "/testbed"
+  # run_args: []
   timeout: 60
   interpreter: ["bash", "-c"]
   env:
@@ -166,15 +175,15 @@ model:
     If you're using grep or find and it produced too much output, you can use a more selective search pattern.
     If you really need to see something from the full command's output, you can redirect output to a file and then search in that file.
     </warning>
-    {%- set elided_chars = output.output | length - 10000 -%}
+    {%- set elided_chars = output.output | length - 100000 -%}
     <output_head>
-    {{ output.output[:5000] }}
+    {{ output.output[:50000] }}
     </output_head>
     <elided_chars>
     {{ elided_chars }} characters elided
     </elided_chars>
     <output_tail>
-    {{ output.output[-5000:] }}
+    {{ output.output[-50000:] }}
     </output_tail>
     {%- endif -%}
   format_error_template: |
@@ -184,27 +193,22 @@ model:
     {{error}}
     </error>
 
-    Here is general guidance on how to submit correct toolcalls:
-
-    Every response needs to use tools to accomplish tasks. You have access to:
+    Every response must include at least one tool call. You have access to:
 
     1. **bash tool** - Execute shell commands:
-       - Tool: bash  
+       - Tool: bash
        - Arguments: {"command": "your_command_here"}
 
-    2. **MCP tools** - Specialized tools for structural search:
-       - Use structural search tools for finding code patterns
-       - These tools can help you understand large codebases more efficiently than grep/find
-       - For initial discovery, prefer MCP structural calls before bash filesystem discovery commands
-       - If `run_structural_search_function` is available and preflight was not done yet, your NEXT turn must call it with:
-         - `run_structural_search_function` MCP tool call 
-         - with {'function_name': 'list_functions', 'arguments': {}} MCP arguments (ALWAYS use the `arguments` even if set to an empty dictionary)
-         - that is, no initial bash discovery command
-       - If a call to `run_structural_search_function` fails, check the tool response and use the exact call format shown in its `syntax` field
-       - More generally speaking, call the `get_structural_search_function_syntax` tool with the list of structural search functions you want to use if you're unsure about the correct syntax for calling them
+    2. **MCP tools** - Structural search tools (called as direct tool calls, NOT bash strings):
+       - `run_structural_search_function` with {"function_name": "...", "arguments": {...}}
+       - If the pre-flight `list_functions` call has not been done yet, your NEXT call MUST be:
+         `run_structural_search_function` with `{"function_name": "list_functions", "arguments": {}}`
+       - If a call fails, check the response for a `syntax` field and use that exact format
+       - If unsure about function arguments, call `get_structural_search_function_syntax` first
+       - **Pagination reminder**: if you see `characters elided` in the response, the output was truncated — retry with a smaller `items_per_page`
 
-    If you have completed your assignment, please consult the first message about how to
-    submit your solution (you will not be able to continue working on this task after that).
+    If you have completed your assignment, consult the first message for submission instructions
+    (you will not be able to continue working after submitting).
   model_name: "anthropic/claude-sonnet-4-5-20250929"
   model_kwargs:
     drop_params: true

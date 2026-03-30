@@ -1,0 +1,42 @@
+services:
+  mini-swe-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    image: mini-swe-agent-runner:latest
+
+    # Interactive bash session
+    stdin_open: true
+    tty: true
+    command: /bin/bash
+
+    working_dir: /workspace
+
+    volumes:
+      # Source mounts (read-write so outputs land back on the host)
+      - ./enterprise:/workspace/enterprise
+      - ./cast_config:/workspace/cast_config
+      - ./trajectories:/workspace/trajectories
+
+      # Docker socket — required for --environment-class docker (runs SWE-bench sub-containers)
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # API keys loaded by mini-swe-agent from ~/.config/mini-swe-agent/.env
+      - ~/.config/mini-swe-agent:/root/.config/mini-swe-agent:ro
+
+    # Expose host network so the MCP server at localhost:8282 is reachable as-is.
+    # Remove this and use extra_hosts below if you need port isolation.
+    network_mode: host
+
+    # If you prefer bridge networking instead of host mode, comment out network_mode above
+    # and uncomment the block below. Then replace "localhost" with "host.docker.internal"
+    # in cast_config/mcp_http_config.yaml.
+    #
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+
+    environment:
+      # Prevents Python output buffering in logs
+      - PYTHONUNBUFFERED=1
+      # Docker sub-containers are created on the host daemon — keep the same image references
+      - DOCKER_HOST=unix:///var/run/docker.sock

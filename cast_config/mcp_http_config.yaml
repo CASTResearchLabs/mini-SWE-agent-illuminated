@@ -1,4 +1,4 @@
-servers:
+mcp_servers:
   - name: structural-search
     url: http://localhost:8282/mcp
     headers:

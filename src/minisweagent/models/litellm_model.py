@@ -201,7 +201,10 @@ class LitellmModel:
                 )
                 logger.critical(msg)
                 raise RuntimeError(msg) from e
-        return {"cost": cost}
+        usage = getattr(response, "usage", None) or {}
+        prompt_tokens = getattr(usage, "prompt_tokens", None) or usage.get("prompt_tokens", 0) or 0
+        completion_tokens = getattr(usage, "completion_tokens", None) or usage.get("completion_tokens", 0) or 0
+        return {"cost": cost, "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}
 
     def _parse_actions(self, response) -> list[dict]:
         """Parse tool calls from the response. Raises FormatError if unknown tool."""

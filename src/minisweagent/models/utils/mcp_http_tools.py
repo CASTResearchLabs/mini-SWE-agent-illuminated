@@ -42,7 +42,7 @@ def load_mcp_http_servers(config: Path | str | dict) -> list[MCPHTTPServerConfig
         data = config
     else:
         data = _load_config(Path(config))
-    servers_raw = data if isinstance(data, list) else data.get("servers", [])
+    servers_raw = data if isinstance(data, list) else data.get("mcp_servers", [])
     return [_normalize_server_config(server) for server in servers_raw]
 
 

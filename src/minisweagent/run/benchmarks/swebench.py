@@ -108,13 +108,13 @@ def get_sb_environment(config: dict, instance: dict) -> Environment:
     return env
 
 
-def update_preds_file(output_path: Path, instance_id: str, model_name: str, result: str):
+def update_preds_file(output_path: Path, run_id: str, instance_id: str, model_name: str, result: str):
     """Update the output JSON file with results from a single instance."""
     with _OUTPUT_FILE_LOCK:
         output_data = {}
         if output_path.exists():
             output_data = json.loads(output_path.read_text())
-        output_data[instance_id] = {
+        output_data[run_id] = {
             "model_name_or_path": model_name,
             "instance_id": instance_id,
             "model_patch": result,
@@ -122,15 +122,34 @@ def update_preds_file(output_path: Path, instance_id: str, model_name: str, resu
         output_path.write_text(json.dumps(output_data, indent=2))
 
 
-def remove_from_preds_file(output_path: Path, instance_id: str):
+def remove_from_preds_file(output_path: Path, run_id: str):
     """Remove an instance from the predictions file."""
     if not output_path.exists():
         return
     with _OUTPUT_FILE_LOCK:
         output_data = json.loads(output_path.read_text())
-        if instance_id in output_data:
-            del output_data[instance_id]
+        if run_id in output_data:
+            del output_data[run_id]
             output_path.write_text(json.dumps(output_data, indent=2))
+
+
+def _make_run_slug(config_spec: list[str], model_name: str) -> str:
+    """Build a filesystem-safe slug from config file stems and model name.
+
+    Only file-path specs contribute (key=value overrides are skipped).
+    Example: ["./cast_config/swebench.yaml"], "anthropic/claude-sonnet-4-5"
+             → "swebench__claude-sonnet-4-5"
+    """
+    safe = re.compile(r"[^a-zA-Z0-9_-]")
+    parts = []
+    for spec in config_spec:
+        if "=" not in spec:  # skip key=value overrides
+            stem = Path(spec).stem
+            parts.append(safe.sub("-", stem))
+    model_part = safe.sub("-", model_name.split("/")[-1]) if model_name else ""
+    if model_part:
+        parts.append(model_part)
+    return "__".join(parts) if parts else "run"
 
 
 def process_instance(
@@ -138,13 +157,15 @@ def process_instance(
     output_dir: Path,
     config: dict,
     progress_manager: RunBatchProgressManager,
+    run_slug: str = "",
 ) -> None:
     """Process a single SWEBench instance."""
     instance_id = instance["instance_id"]
-    instance_dir = output_dir / instance_id
+    run_id = f"{instance_id}__{run_slug}" if run_slug else instance_id
+    instance_dir = output_dir / run_id
     # avoid inconsistent state if something here fails and there's leftover previous files
-    remove_from_preds_file(output_dir / "preds.json", instance_id)
-    (instance_dir / f"{instance_id}.traj.json").unlink(missing_ok=True)
+    remove_from_preds_file(output_dir / "preds.json", run_id)
+    (instance_dir / f"{run_id}.traj.json").unlink(missing_ok=True)
     model = get_model(config=config.get("model", {}))
     task = instance["problem_statement"]
 
@@ -174,7 +195,7 @@ def process_instance(
         extra_info = {"traceback": traceback.format_exc(), "exception_str": str(e)}
     finally:
         if agent is not None:
-            traj_path = instance_dir / f"{instance_id}.traj.json"
+            traj_path = instance_dir / f"{run_id}.traj.json"
             agent.save(
                 traj_path,
                 {
@@ -187,7 +208,7 @@ def process_instance(
                 },
             )
             logger.info(f"Saved trajectory to '{traj_path}'")
-        update_preds_file(output_dir / "preds.json", instance_id, model.config.model_name, result)
+        update_preds_file(output_dir / "preds.json", run_id, instance_id, model.config.model_name, result)
         progress_manager.on_instance_end(instance_id, exit_status)
 
 
@@ -240,10 +261,6 @@ def main(
     instances = list(load_dataset(dataset_path, split=split))
 
     instances = filter_instances(instances, filter_spec=filter_spec, slice_spec=slice_spec, shuffle=shuffle)
-    if not redo_existing and (output_path / "preds.json").exists():
-        existing_instances = list(json.loads((output_path / "preds.json").read_text()).keys())
-        logger.info(f"Skipping {len(existing_instances)} existing instances")
-        instances = [instance for instance in instances if instance["instance_id"] not in existing_instances]
     logger.info(f"Running on {len(instances)} instances...")
 
     logger.info(f"Building agent config from specs: {config_spec}")
@@ -253,6 +270,18 @@ def main(
         "model": {"model_name": model or UNSET, "model_class": model_class or UNSET},
     })
     config = recursive_merge(*configs)
+
+    run_slug = _make_run_slug(config_spec, config.get("model", {}).get("model_name", ""))
+    logger.info(f"Run slug: {run_slug}")
+
+    if not redo_existing and (output_path / "preds.json").exists():
+        existing_run_ids = set(json.loads((output_path / "preds.json").read_text()).keys())
+        before = len(instances)
+        instances = [i for i in instances if f"{i['instance_id']}__{run_slug}" not in existing_run_ids
+                     and i["instance_id"] not in existing_run_ids]
+        skipped = before - len(instances)
+        if skipped:
+            logger.info(f"Skipping {skipped} existing instances (run_slug={run_slug})")
 
     progress_manager = RunBatchProgressManager(len(instances), output_path / f"exit_statuses_{time.time()}.yaml")
 
@@ -270,7 +299,7 @@ def main(
     with Live(progress_manager.render_group, refresh_per_second=4):
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
-                executor.submit(process_instance, instance, output_path, config, progress_manager): instance[
+                executor.submit(process_instance, instance, output_path, config, progress_manager, run_slug): instance[
                     "instance_id"
                 ]
                 for instance in instances
