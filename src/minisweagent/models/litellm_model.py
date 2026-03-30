@@ -43,8 +43,8 @@ class LitellmModelConfig(BaseModel):
     """Template used to render the observation after executing an action."""
     multimodal_regex: str = ""
     """Regex to extract multimodal content. Empty string disables multimodal processing."""
-    mcp_http_config: Path | str | None = None
-    """Path to MCP Streamable-HTTP server configuration (JSON/YAML)."""
+    mcp_http_config: Path | str | dict | None = None
+    """Path to MCP Streamable-HTTP server configuration (JSON/YAML), or inlined config dict."""
     mcp_tool_prefix: str = "mcp__"
     """Prefix for exposing MCP tools to the LM."""
     mcp_http_timeout: int = 20

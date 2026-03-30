@@ -1,0 +1,10 @@
+mini-e swebench \
+  --subset enterprise/openmrs01 \
+  --split test \
+  --environment-class docker \
+  --config ./cast_config/swebench.yaml \
+  --config agent.per_instance_cost_limit=1.0 \
+  --model-class litellm \
+  --model openai/gpt-4o \
+  --output enterprise/openmrs01 \
+  --redo-existing

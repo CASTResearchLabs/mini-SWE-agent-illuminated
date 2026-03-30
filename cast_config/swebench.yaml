@@ -213,3 +213,4 @@ model:
   mcp_http_config: "./cast_config/mcp_http_config.yaml"
   mcp_tool_prefix: "mcp__"
   mcp_http_timeout: 30
+  image: cast0research0labs/mini-swe-agent:latest

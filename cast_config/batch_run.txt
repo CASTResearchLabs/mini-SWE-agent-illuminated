@@ -7,4 +7,4 @@ mini -m openai/gpt-4o \
   --environment-class local \
   --exit-immediately \
   --output ./trajectories/help.traj \
-  --agent-class interactive 
+  --agent-class default 

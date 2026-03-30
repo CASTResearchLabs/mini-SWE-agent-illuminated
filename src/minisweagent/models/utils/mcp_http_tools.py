@@ -37,9 +37,11 @@ def _normalize_server_config(raw: dict[str, Any]) -> MCPHTTPServerConfig:
     )
 
 
-def load_mcp_http_servers(path: Path | str) -> list[MCPHTTPServerConfig]:
-    config_path = Path(path)
-    data = _load_config(config_path)
+def load_mcp_http_servers(config: Path | str | dict) -> list[MCPHTTPServerConfig]:
+    if isinstance(config, dict):
+        data = config
+    else:
+        data = _load_config(Path(config))
     servers_raw = data if isinstance(data, list) else data.get("servers", [])
     return [_normalize_server_config(server) for server in servers_raw]
 
@@ -100,7 +102,7 @@ def _sanitize_tool_name(name: str) -> str:
 
 
 def build_mcp_openai_tools(
-    mcp_http_config: Path | str,
+    mcp_http_config: Path | str | dict,
     *,
     prefix: str = "mcp__",
     timeout: int = 20,
