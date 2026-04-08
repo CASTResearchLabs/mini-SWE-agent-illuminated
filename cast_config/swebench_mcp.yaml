@@ -1,0 +1,242 @@
+agent:                                                                                                                              
+  system_template: |                                                                                                                
+    You are a helpful assistant that can interact with a computer shell to solve programming tasks.                                 
+  instance_template: |                                                                                                              
+    <pr_description>
+    Consider the following PR description:                                                                                          
+    {{task}}    
+    </pr_description>                                                                                                               
+  
+    <instructions>                                                                                                                  
+    # Task Instructions
+
+    ## Overview                                                                                                                     
+  
+    You're a software engineer interacting continuously with a computer by submitting commands.                                     
+    You'll be helping implement necessary changes to meet requirements in the PR description.
+    Your task is specifically to make changes to non-test files in the current directory in order to fix the issue described in the 
+    PR description in a way that is general and consistent with the codebase.                                                           
+        <IMPORTANT>This is an interactive process where you will think and issue AT LEAST ONE command, see the result, then think and   
+    issue your next command(s).</IMPORTANT>                                                                                             
+                  
+    For each response:                                                                                                              
+                
+    1. Include a THOUGHT section explaining your reasoning and what you're trying to accomplish                                     
+    2. Provide one or more tool calls to execute (bash tool or MCP tool if available)
+                                                                                                                                    
+    ## Important Boundaries
+                                                                                                                                    
+    - MODIFY: Regular source code files in /testbed (this is the working directory for all your subsequent commands)                
+    - DO NOT MODIFY: Tests, configuration files (pyproject.toml, setup.cfg, etc.)
+                                                                                                                                    
+    ## MCP Server — When and How to Use
+
+    An optional CAST Imaging knowledge graph is available via MCP. Use it when the PR description
+    does not tell you exactly which files to change, or when you need to verify that no callers
+    were missed after a refactor. Skip it when the PR already names every file and method.
+
+    **Application name**: The PR description may contain *"known as application `<name>` in Imaging
+    MCP server"*. Use that exact name as the `application` parameter in every scoped MCP call.
+
+    **Two MCP tools are available**:
+    - `run_text2graph_function` — executes any graph-exploration function.
+    - `get_text2graph_function_syntax` — returns the parameter schema for a function. Call this
+      whenever you are unsure of a parameter name or type.
+
+    **Pagination**: listing functions accept `limit` (max 50) and `skip` (offset).
+    Start at `limit: 20`; page with `skip`. Stop when `has_more` is false.
+
+    **When MCP adds value** (use selectively, not exhaustively):
+    - You don't know which files contain a symbol → `find_objects` with `name_filter`
+    - You need all callers of a method before changing its signature → `object_contexts`
+      or `find_same_technology_callers`; run on the *method being called*, not just the
+      one being changed, to surface callers not mentioned in the PR
+    - You need to trace the implementation chain downward (e.g. util → service → DAO impl)
+      to know which interfaces also need a new method → `find_same_technology_callees`
+    - The task involves deprecated or removed APIs and you need every call site with file
+      paths upfront → `insight_occurrences` with the rule name as `insight_name_filter`;
+      returns file path + line number per violation, avoiding a noisy grep
+    - The PR mentions a DB column and you need all Java objects that read/write it →
+      `data_model` then `object_contexts` on the column
+
+    **Graceful degradation**: if 3 or more consecutive MCP calls return errors, switch to bash.
+
+    ## Workflow
+
+    1. **Read the PR description carefully.** If it names specific files and methods, go directly
+       to bash to read those files and make the changes. MCP is optional.
+    2. **Use MCP selectively** when you need structural information the PR doesn't provide
+       (finding all call sites, locating files for a symbol, blast-radius analysis).
+    3. **Use bash** for exact method signatures, line-level context, and to verify edits.
+       Do not use broad grep sweeps to re-derive what MCP already told you.
+
+    ```bash
+    # Find definition of a symbol
+    grep -rn "def symbol\|class Symbol" /testbed/src
+
+    # Inspect a range of lines
+    sed -n '40,80p' /testbed/path/to/file.java
+
+    # Redirect large output to avoid truncation
+    find /testbed -name "*.java" > /tmp/files.txt && head -30 /tmp/files.txt
+    ```
+
+    4. **Implement** the smallest change that correctly addresses the root cause.
+       Do not refactor surrounding code or fix unrelated issues.
+    5. **Verify** with tests or a reproduction script. If you changed a method signature,
+       use `find_same_technology_callers` to confirm no callers were missed. If you fixed
+       a deprecated-API violation, re-run `insight_occurrences` with the same filter to
+       confirm all instances were addressed.                                           
+                
+    ## Command Execution Rules                                                                                                      
+                
+    - Every response MUST include at least one tool call (bash or MCP).
+    - You can make MULTIPLE tool calls in a single response when they are independent.
+    - MCP tools are called as direct tool calls with JSON arguments — NOT as bash strings.
+    - Shell state does not persist between bash commands — use `cd /path && command`.
+    - Always use non-interactive flags: `-y`, `-f`, `--yes`, `-n` where applicable.                                                 
+    - Avoid interactive editors (vi, nano); use `sed -i`, `awk`, or write files with heredocs.                                      
+                                                                                                                                    
+    ## MCP Function Quick Reference
+
+    | Goal | Function |
+    |---|---|
+    | Confirm app name | `list_applications` |
+    | Find a class/method/field | `find_objects` |
+    | Callers, callees, membership | `object_contexts` |
+    | All transitive callers | `find_same_technology_callers` |
+    | All transitive callees | `find_same_technology_callees` |
+    | DB table schema + columns | `data_model` |
+    | Objects violating a rule (with file location) | `insight_occurrences` |
+    | Check function parameters | `get_text2graph_function_syntax` |                                                                
+                                                                                                                                    
+    ## Submission
+                                                                                                                                    
+    When you've completed your work, you MUST submit your changes as a git patch.
+    Follow these steps IN ORDER, with SEPARATE commands:
+                                                                                                                                    
+    **Step 1: Stage and create the patch**
+    ```bash                                                                                                                         
+    git -C /testbed add path/to/file1 path/to/file2
+    git -C /testbed diff --cached -- path/to/file1 path/to/file2 > /testbed/patch.txt
+    ```                                                                                                                             
+    List only the source files you modified. Do NOT commit.
+                                                                                                                                    
+    <IMPORTANT> 
+    The patch must only contain changes to the specific source files you modified to fix the issue.
+    Do not submit file creations or changes to any of the following files:                                                          
+  
+    - test and reproduction files                                                                                                   
+    - helper scripts, tests, or tools that you created
+    - installation, build, packaging, configuration, or setup scripts unless they are directly part of the issue you were fixing    
+    - binary or compiled files
+    </IMPORTANT>                                                                                                                    
+                
+    **Step 2: Verify your patch**                                                                                                   
+    ```bash
+    cat /testbed/patch.txt                                                                                                          
+    ```         
+    Confirm it only contains your intended changes and headers show `--- a/` and `+++ b/` paths.
+    If the patch is empty, you likely patched an untracked file — re-check with `git -C /testbed status`.                           
+  
+    **Step 3: Submit (EXACT command required)**                                                                                     
+    ```bash     
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat /testbed/patch.txt
+    ```                                                                                                                             
+  
+    <CRITICAL>                                                                                                                      
+    - Steps 1, 2, and 3 MUST be separate commands (do not chain them with &&).
+    - If you modify patch.txt after verifying, you SHOULD verify again before submitting.
+    - You CANNOT continue working (reading, editing, testing) in any way on this task after submitting.                             
+    - If patch.txt is empty, do NOT submit — diagnose and fix the staging step first.
+    </CRITICAL>                                                                                                                     
+    </instructions>
+  step_limit: 250                                                                                                                   
+  cost_limit: 3.
+
+environment:
+  cwd: "/testbed"
+  timeout: 60                                                                                                                       
+  interpreter: ["bash", "-c"]
+  env:                                                                                                                              
+    PAGER: cat  
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: "off"
+    TQDM_DISABLE: "1"
+  environment_class: docker
+                                                                                                                                    
+model:
+  observation_template: |                                                                                                           
+    {% if output.exception_info -%}
+    <exception>{{output.exception_info}}</exception>
+    {% endif -%}
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>                                                                                                                        
+    {{ output.output -}}
+    </output>                                                                                                                       
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a different command that produces less output.
+    If you're looking at a file you can try use head, tail or sed to view a smaller number of lines selectively.
+    If you're using grep or find and it produced too much output, you can use a more selective search pattern.                      
+    If you really need to see something from the full command's output, you can redirect output to a file and then search in that file.                                                                                                                               
+    </warning>  
+    {%- set elided_chars = output.output | length - 100000 -%}                                                                      
+    <output_head>
+    {{ output.output[:50000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>                                                                                                                   
+    {{ output.output[-50000:] }}
+    </output_tail>                                                                                                                  
+    {%- endif -%}
+  format_error_template: |
+    Tool call error:
+
+    <error>
+    {{error}}
+    </error>
+
+    Every response must include at least one tool call. You have access to:                                                         
+  
+    1. **bash tool** — Execute shell commands:                                                                                      
+        - Tool: bash
+        - Arguments: {"command": "your_command_here"}
+
+    2. **MCP tools** — CAST Imaging knowledge-graph tools (called as direct tool calls, NOT bash strings):
+
+        - `run_text2graph_function` with `{"function_name": "...", "arguments": {...}}`
+        - `get_text2graph_function_syntax` with `{"function_names": ["<name>"]}` — check parameter schema when unsure
+
+        **Useful functions:**
+
+        | Function | Key parameters |
+        |---|---|
+        | `find_objects` | `application`, `name_filter`, `type_filter`, `limit`, `skip` |
+        | `object_contexts` | `element_id`, `max_caller_hops`, `max_callee_hops` |
+        | `find_same_technology_callers` | `element_id`, `application`, `max_hops` |
+        | `find_same_technology_callees` | `element_id`, `application`, `max_hops` |
+        | `data_model` | `table_element_id`, `include_columns` (bool) |
+        | `insight_occurrences` | `application`, `insight_name_filter`, `limit`, `skip` |
+        | `list_applications` | *(none)* — use to confirm the exact app name |
+
+        **Application name**: use the exact string from *"known as application `<name>` in Imaging MCP server"*.
+        **Pagination**: start at `limit: 20`, use `skip` to page, stop when `has_more` is false.
+        **If a call fails**: call `get_text2graph_function_syntax` with the function name and retry.
+                                                                                                                                    
+    If you have completed your assignment, consult the first message for submission instructions
+    (you will not be able to continue working after submitting).                                                                    
+  model_name: "anthropic/claude-sonnet-4-5-20250929"                                                                                
+  model_kwargs:
+    drop_params: true                                                                                                               
+    temperature: 0.0
+    parallel_tool_calls: true
+  mcp_http_config: "./cast_config/mcp_http_config.yaml"
+  mcp_tool_prefix: "mcp__"
+  mcp_http_timeout: 30
+  image: cast0research0labs/mini-swe-agent:latest

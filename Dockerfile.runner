@@ -4,6 +4,7 @@ FROM python:3.13-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
+        wget \
         ca-certificates \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \

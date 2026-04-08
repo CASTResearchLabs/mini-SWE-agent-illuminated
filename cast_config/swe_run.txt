@@ -2,9 +2,20 @@ mini-e swebench \
   --subset enterprise/openmrs01 \
   --split test \
   --environment-class docker \
-  --config ./cast_config/swebench.yaml \
+  --config ./cast_config/swebench_mcp.yaml \
   --config agent.per_instance_cost_limit=1.0 \
   --model-class litellm \
-  --model gemini/gemini-2.5-flash \
+  --model gemini/gemini-2.5-pro \
+  --output enterprise/openmrs01 \
+  --redo-existing
+
+  mini-e swebench \
+  --subset enterprise/openmrs01 \
+  --split test \
+  --environment-class docker \
+  --config ./cast_config/swebench_bash_only.yaml \
+  --config agent.per_instance_cost_limit=1.0 \
+  --model-class litellm \
+  --model gemini/gemini-2.5-pro \
   --output enterprise/openmrs01 \
   --redo-existing

@@ -68,11 +68,13 @@ async def _rpc_call(url: str, headers: dict[str, str], method: str, params: dict
                 
                 elif method == "tools/list":
                     logger.info("Listing tools...")
+                    await session.initialize()
                     tools_response = await session.list_tools()
                     logger.info(f"Found {len(tools_response.tools)} tools")
                     return {"tools": [{"name": tool.name, "description": tool.description, "inputSchema": tool.inputSchema} for tool in tools_response.tools]}
                 
                 elif method == "tools/call":
+                    await session.initialize()
                     tool_name = params.get("name")
                     arguments = params.get("arguments", {})
                     logger.info(f"Calling tool {tool_name} with arguments: {arguments}")

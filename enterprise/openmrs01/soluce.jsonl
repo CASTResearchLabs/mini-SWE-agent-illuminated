@@ -1,0 +1,138 @@
+{ "instance_id": "openmrs__openmrs-core-02eec598-4",
+  "summary": "Deprecate allergy_status column: remove allergyStatus from Patient entity, replace field access with service API, remove raw SQL selects.",
+  "mcp_workflow": [
+    {
+      "step": 1,
+      "calls": [
+        { "function": "find_objects", "arguments": { "application": "openmrs01", "name_filter": "allergyStatus", "limit": 20 } },
+        { "function": "find_objects", "arguments": { "application": "openmrs01", "name_filter": "allergy_status", "limit": 20 } }
+      ],
+      "purpose": "Locate every named artifact tied to the column: the JPA field on Patient, any getter/setter, and any named query or HQL fragment that references the string. Issue both filters in parallel because the Java property uses camelCase while SQL uses snake_case.",
+      "what_it_returns": "element_ids for Patient.allergyStatus field, getAllergyStatus/setAllergyStatus methods, and any NamedQuery objects containing the string — the complete artifact inventory before a single file is opened."
+    },
+    {
+      "step": 2,
+      "calls": [
+        { "function": "data_model", "arguments": { "table_element_id": "<patient_table_element_id>", "include_columns": true, "fk_depth": 1 } }
+      ],
+      "purpose": "Confirm allergy_status exists as a physical column in the patient table and check whether any FK or index references it (relevant if the removal needs a Liquibase migration too). Use the element_id of the patient Table object returned in step 1.",
+      "what_it_returns": "Full column list for the patient table with types, the allergy_status column entry confirming its varchar type, and FK graph — rules out hidden DB-level dependencies in one call."
+    },
+    {
+      "step": 3,
+      "calls": [
+        { "function": "object_contexts", "arguments": { "element_id": "<allergyStatus_field_element_id>", "max_caller_hops": 4, "max_callee_hops": 1 } }
+      ],
+      "purpose": "From the Patient.allergyStatus field element_id, get its full caller tree: which methods READ the field (getters, HQL projections) and which WRITE it (setters, DAO save paths). max_caller_hops 4 reaches from field → getter → DAO → service → web layer.",
+      "what_it_returns": "Complete list of methods that touch the field across all layers — entity, DAO, service, web — with their own element_ids, enabling targeted edits without any grep."
+    },
+    {
+      "step": 4,
+      "calls": [
+        { "function": "insight_occurrences", "arguments": { "application": "openmrs01", "insight_name_filter": "allergy_status", "limit": 20 } },
+        { "function": "find_objects", "arguments": { "application": "openmrs01", "name_filter": "getPatientsByAllergyStatus", "limit": 10 } }
+      ],
+      "purpose": "Catch any raw SQL / named-query objects that embed the string 'allergy_status' and are not reachable via the Java field graph (e.g. a @NamedNativeQuery or a Hibernate .hbm.xml fragment). Also search for any DAO query method named after allergy status that might embed SQL inline.",
+      "what_it_returns": "File path + line number of every quality-rule hit on the string, and any standalone query methods — closes the gap between structural callers (step 3) and raw SQL occurrences."
+    }
+  ],
+  "key_mcp_value": [
+    "data_model on the patient table confirms at DB-graph level which queries SELECT allergy_status — a grep for 'allergy_status' in Java files would miss .hbm.xml NamedNativeQuery fragments stored as separate objects in the graph.",
+    "object_contexts on the allergyStatus field returns the caller tree across all 4 architectural layers in one call, eliminating the need to trace getter → DAO → service → web manually.",
+    "Running find_objects with both 'allergyStatus' (camelCase) and 'allergy_status' (snake_case) in parallel ensures no layer is missed regardless of naming convention."
+  ],
+  "bash_still_needed": [
+    "Read Patient.java to see the exact @Column annotation and field declaration before removing it.",
+    "Read HibernatePatientDAO.java around the named query to see the exact SQL string to comment out.",
+    "Run mvn compile -pl api to confirm no remaining references."
+  ]
+}
+{ "instance_id": "openmrs__openmrs-core-02eec598-5",
+  "summary": "Hibernate 6 migration: replace createCriteria in getSavedEncounterDatetime, getSavedEncounterLocation, getSavedStatus with typed HQL; remove @Deprecated from DAO interfaces.",
+  "mcp_workflow": [
+    {
+      "step": 1,
+      "calls": [
+        { "function": "insight_occurrences", "arguments": { "application": "openmrs01", "insight_name_filter": "Avoid using deprecated method", "limit": 50 } }
+      ],
+      "purpose": "Get the full list of objects flagged for deprecated API usage with their source file paths and line numbers. This enumerates all createCriteria call sites across the codebase in one query, including the 3 target methods and any others that might also need migration.",
+      "what_it_returns": "One row per (method, insight) pair with file path and line number — directly identifies HibernateEncounterDAO.getSavedEncounterDatetime, getSavedEncounterLocation and HibernateObsDAO.getSavedStatus as the createCriteria users, plus their exact source locations."
+    },
+    {
+      "step": 2,
+      "calls": [
+        { "function": "find_objects", "arguments": { "application": "openmrs01", "name_filter": "getSavedEncounterDatetime", "limit": 10 } },
+        { "function": "find_objects", "arguments": { "application": "openmrs01", "name_filter": "getSavedStatus", "limit": 10 } }
+      ],
+      "purpose": "Retrieve element_ids for all three target methods across all their declarations: interface (EncounterDAO / ObsDAO), Hibernate implementation, and any abstract base class. Both searches run in parallel; getSavedEncounterLocation appears in the same results as getSavedEncounterDatetime.",
+      "what_it_returns": "3–6 objects per method name: the interface declaration (where @Deprecated must be removed), the HibernateXxxDAO implementation (where createCriteria must be replaced), confirming the exact class hierarchy without reading any file."
+    },
+    {
+      "step": 3,
+      "calls": [
+        { "function": "object_contexts", "arguments": { "element_id": "<getSavedEncounterDatetime_impl_element_id>", "max_caller_hops": 2, "max_callee_hops": 2 } },
+        { "function": "object_contexts", "arguments": { "element_id": "<getSavedStatus_impl_element_id>", "max_caller_hops": 2, "max_callee_hops": 2 } }
+      ],
+      "purpose": "Confirm the callers of each method (EncounterServiceImpl.saveEncounter and ObsServiceImpl.saveExistingObs as stated in the PR) and verify no additional callers exist that would be broken by the signature change. Also confirms the callees (DbSession.createCriteria) to understand what exactly gets replaced.",
+      "what_it_returns": "Caller list per method — verifies the PR description is complete (exactly 2 callers for encounter methods, 1 for obs) and gives element_ids of the DbSession.createCriteria callee for cross-reference."
+    }
+  ],
+  "key_mcp_value": [
+    "insight_occurrences with the deprecated-API filter returns all 3 target methods with source file paths and line numbers in a single call — without MCP the agent would grep for 'createCriteria' and get noise from the DbSession facade itself and other DAO classes.",
+    "find_objects returns both the interface declaration and the Hibernate implementation for each method name, immediately revealing the two files that each need edits (@Deprecated removal on the interface + createCriteria replacement in the impl) — without this the agent might edit only the implementation and miss the interface.",
+    "object_contexts caller check provides a guarantee that no callers outside EncounterServiceImpl/ObsServiceImpl exist, giving confidence to proceed without an exhaustive grep."
+  ],
+  "bash_still_needed": [
+    "Read the 3 target method bodies to see the exact Criteria chain (which Restrictions, Projections) before writing the HQL equivalent.",
+    "Read the EncounterDAO.java and ObsDAO.java interface declarations to locate the exact @Deprecated line numbers.",
+    "Run mvn test -pl api to verify the unit/integration tests still pass after the replacements."
+  ]
+}
+{ "instance_id": "openmrs__openmrs-core-02eec598-6",
+  "summary": "Eliminate N+1 CLOB lookups in CustomDatatypeUtil: add bulk getClobDatatypeStoragesByUuids through DAO/Service stack, refactor save loop, update ClobCustomDatatype.save signature.",
+  "mcp_workflow": [
+    {
+      "step": 1,
+      "calls": [
+        { "function": "find_objects", "arguments": { "application": "openmrs01", "name_filter": "getClobDatatypeStorageByUuid", "limit": 20 } }
+      ],
+      "purpose": "Locate every caller of the per-attribute lookup method across the codebase. The PR names CustomDatatypeUtil as one caller but step 4 requires finding ClobCustomDatatype as a second independent caller — this is the hardest part to discover without structural analysis.",
+      "what_it_returns": "All method objects named getClobDatatypeStorageByUuid (the interface DatatypeService, the impl DatatypeServiceImpl, the DAO interface, HibernateDatatypeDAO) plus — crucially — their caller list, revealing that both CustomDatatypeUtil.saveAttributesIfNecessary AND ClobCustomDatatype.save call it."
+    },
+    {
+      "step": 2,
+      "calls": [
+        { "function": "object_contexts", "arguments": { "element_id": "<getClobDatatypeStorageByUuid_service_element_id>", "max_caller_hops": 3, "max_callee_hops": 2 } }
+      ],
+      "purpose": "From the DatatypeService.getClobDatatypeStorageByUuid element_id, get the full caller tree to confirm all call sites (expected: CustomDatatypeUtil and ClobCustomDatatype) and the callee chain down to HibernateDatatypeDAO to understand where the new bulk method must be added.",
+      "what_it_returns": "Complete caller set — confirms exactly 2 callers that must be refactored, and the callee chain service → serviceImpl → DAO → HibernateDAO showing all 4 classes that need the new getClobDatatypeStoragesByUuids method."
+    },
+    {
+      "step": 3,
+      "calls": [
+        { "function": "find_same_technology_callees", "arguments": { "element_id": "<saveAttributesIfNecessary_element_id>", "application": "openmrs01", "max_hops": 3 } }
+      ],
+      "purpose": "Map the full call chain downward from saveAttributesIfNecessary to confirm which concrete DAO class executes the actual query. This verifies the implementation path: CustomDatatypeUtil → DatatypeServiceImpl → HibernateDatatypeDAO, which determines which classes need the new bulk method.",
+      "what_it_returns": "Nested call tree from saveAttributesIfNecessary down to HibernateDatatypeDAO with element_ids — confirms the complete set of 4 files (DatatypeDAO interface, HibernateDatatypeDAO, DatatypeService interface, DatatypeServiceImpl) that need the new method, matching exactly the files listed in task steps 1 and 2."
+    },
+    {
+      "step": 4,
+      "calls": [
+        { "function": "find_objects", "arguments": { "application": "openmrs01", "name_filter": "ClobCustomDatatype", "type_filter": "Java Class", "limit": 10 } }
+      ],
+      "purpose": "Confirm the exact package and source path of ClobCustomDatatype before editing its save() method signature, and cross-check that its element_id appears in the getClobDatatypeStorageByUuid caller list from step 1.",
+      "what_it_returns": "Exact file path for ClobCustomDatatype.java and confirmation it is the same caller discovered in step 1 — eliminates any ambiguity about which class implements the save method to be refactored."
+    }
+  ],
+  "key_mcp_value": [
+    "find_objects on getClobDatatypeStorageByUuid and then object_contexts on the result is the critical shortcut for task step 4: ClobCustomDatatype.save() calls this method internally but is not mentioned anywhere in the save loop that the PR description describes. A code-level grep for 'saveAttributesIfNecessary' would never reveal it; only following the callers of getClobDatatypeStorageByUuid from the graph exposes the second call site.",
+    "find_same_technology_callees on saveAttributesIfNecessary maps the full 4-layer interface-to-impl chain (CustomDatatypeUtil → DatatypeService → DatatypeServiceImpl → HibernateDatatypeDAO) in one call, preventing the common mistake of adding the new method to the implementation only and forgetting the interface.",
+    "object_contexts caller count gives a guaranteed complete count of call sites — confirms there are exactly 2 callers (not 3 or 4) so the refactor scope is bounded."
+  ],
+  "bash_still_needed": [
+    "Read saveAttributesIfNecessary body to understand the exact loop structure and how getClobDatatypeStorageByUuid return value is used before writing the bulk pre-fetch version.",
+    "Read ClobCustomDatatype.save() to understand its current signature and how it invokes getClobDatatypeStorageByUuid, in order to design the Optional<ClobDatatypeStorage> parameter replacement.",
+    "Read HibernateDatatypeDAO to find an existing HQL query as a pattern for the new IN-clause bulk query.",
+    "Run mvn test -pl api -Dtest=CustomDatatypeUtilTest,DatatypeServiceTest to verify."
+  ]
+}

@@ -40,19 +40,21 @@ agent:
     Follow this sequence — each step only if the previous succeeded:
     1. `stats` — smallest response, confirms connectivity
     2. `architectural_graph` — layer distribution and coupling
-    3. `transactions` with `{"items_per_page": 30}` — entry points, paginate if needed
-    4. `objects` with `{"items_per_page": 40}` — code elements, paginate if needed
-    5. `quality_insights` with `{"items_per_page": 20}` — ALWAYS use this limit; default returns 100+ items which exceeds the response size limit and gets truncated
+    3. `transactions` with `{"items_per_page": 10}` — start small; increase to 20 only if the response fits comfortably
+    4. `objects` with `{"items_per_page": 10}` — start small; increase to 20 only if the response fits comfortably
+    5. `quality_insights` with `{"items_per_page": 10}` — ALWAYS paginate; default returns 100+ items
 
-    **PAGINATION IS MANDATORY for large-dataset functions:**
-    - `quality_insights`: always `items_per_page: 20`
-    - `transactions`, `objects`, `advisors`: use `items_per_page: 30-50`
-    - If a response is truncated (you see `characters elided`), retry with a smaller `items_per_page` or use `page` to fetch subsequent pages
-    - Process one page at a time; do not attempt to retrieve all data in a single call
+    **PAGINATION IS MANDATORY — `items_per_page` IS ALWAYS REQUIRED:**
+    - **Every** call to `transactions`, `objects`, `data_graphs`, `advisors`, `quality_insights`, `object_details`, `transaction_details`, or `data_graph_details` MUST include `"items_per_page"`.
+    - Omitting `items_per_page` is an error — the default page size is too large and will produce oversized responses.
+    - **Start at 10** for every new function. If the response is short and manageable, you may increase to 20 on subsequent pages.
+    - Never exceed `items_per_page: 20`. If 20 still produces truncation (`characters elided`), drop back to 10.
+    - Use `"page": N` to fetch subsequent pages. Process one page at a time.
+    - Stop paginating when you have enough information — do not fetch all pages by default.
 
     **Graceful degradation:**
     - If 3 or more consecutive MCP calls return errors, stop attempting MCP and switch entirely to bash exploration
-    - A single failed call is not a reason to abandon MCP — retry once with reduced `items_per_page`
+    - A single failed call is not a reason to abandon MCP — retry once with a smaller `items_per_page`
 
     ### Phase 2: Targeted bash verification (complement, not substitute)
 
@@ -205,7 +207,9 @@ model:
          `run_structural_search_function` with `{"function_name": "list_functions", "arguments": {}}`
        - If a call fails, check the response for a `syntax` field and use that exact format
        - If unsure about function arguments, call `get_structural_search_function_syntax` first
-       - **Pagination reminder**: if you see `characters elided` in the response, the output was truncated — retry with a smaller `items_per_page`
+       - **`items_per_page` is ALWAYS required** for `transactions`, `objects`, `data_graphs`, `advisors`, `quality_insights`, `object_details`, `transaction_details`, `data_graph_details` — omitting it produces oversized responses
+       - **Start at `items_per_page: 10`**; increase to 20 only if the response is clearly manageable; never exceed 20
+       - If you see `characters elided`, the response was truncated — retry with a smaller `items_per_page`
 
     If you have completed your assignment, consult the first message for submission instructions
     (you will not be able to continue working after submitting).

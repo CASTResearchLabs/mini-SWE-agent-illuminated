@@ -10,7 +10,7 @@ Key differences from SWE-agent:
 - Top-level keys: messages, info, instance_id, trajectory_format
 - Steps represented as messages with roles: system/user/assistant/tool/exit
 - Problem statement in <pr_description> tag (not <task_description>)
-- model_stats: only instance_cost and api_calls (no tokens_sent/tokens_received)
+- model_stats: instance_cost, api_calls, tokens_sent, tokens_received
 - Model name at info['config']['model']['model_name']
 - Version at info['mini_version'] (not info['swe_agent_version'])
 - Exit status is 'Submitted' (capitalized)
@@ -148,18 +148,14 @@ class TrajectoryAnalyzer:
             return f"Error extracting patch: {str(e)}"
 
     def extract_model_stats(self, trajectory_data: Dict) -> ModelStats:
-        """Extract model statistics from mini-swe-agent trajectory data.
-
-        Note: tokens_sent and tokens_received are not tracked by mini-swe-agent
-        and will always be 0.
-        """
+        """Extract model statistics from mini-swe-agent trajectory data."""
         try:
             if "info" in trajectory_data and "model_stats" in trajectory_data["info"]:
                 stats = trajectory_data["info"]["model_stats"]
                 return ModelStats(
                     instance_cost=stats.get("instance_cost", 0.0),
-                    tokens_sent=0,   # not available in mini-swe-agent
-                    tokens_received=0,  # not available in mini-swe-agent
+                    tokens_sent=stats.get("tokens_sent", 0),
+                    tokens_received=stats.get("tokens_received", 0),
                     api_calls=stats.get("api_calls", 0),
                 )
             return ModelStats(0.0, 0, 0, 0)
@@ -626,12 +622,16 @@ class TrajectoryAnalyzer:
             f.write(f"| Actually used MCP | {used_mcp} | {used_mcp/len(results)*100:.1f}% |\n\n")
 
             total_cost = sum(r.model_stats.instance_cost for r in results)
+            total_tokens_sent = sum(r.model_stats.tokens_sent for r in results)
+            total_tokens_received = sum(r.model_stats.tokens_received for r in results)
             avg_execution_time = sum(r.total_execution_time for r in results) / len(results)
             avg_actions = sum(len(r.actions) for r in results) / len(results)
 
             f.write("## 💰 Cost & Performance Overview\n\n")
             f.write(f"- **Total Cost:** ${total_cost:.2f}\n")
             f.write(f"- **Average Cost per Trajectory:** ${total_cost/len(results):.2f}\n")
+            f.write(f"- **Total Tokens Sent:** {total_tokens_sent:,}\n")
+            f.write(f"- **Total Tokens Received:** {total_tokens_received:,}\n")
             f.write(f"- **Average Execution Time:** {avg_execution_time:.1f}s\n")
             f.write(f"- **Average Actions per Trajectory:** {avg_actions:.1f}\n\n")
 
@@ -673,6 +673,8 @@ class TrajectoryAnalyzer:
                 f.write(f"| Success Ratio | {result.success_ratio:.1%} ({sum(1 for a in result.actions if a.success)}/{len(result.actions)} actions) |\n")
                 f.write(f"| Cost | ${result.model_stats.instance_cost:.2f} |\n")
                 f.write(f"| API Calls | {result.model_stats.api_calls} |\n")
+                f.write(f"| Tokens Sent | {result.model_stats.tokens_sent:,} |\n")
+                f.write(f"| Tokens Received | {result.model_stats.tokens_received:,} |\n")
                 f.write(f"| MCP Usage | {result.mcp_usage:.1%} of steps |\n")
                 f.write(f"| Date | {result.date.split('T')[0] if 'T' in result.date else result.date} |\n\n")
 
@@ -807,6 +809,8 @@ class TrajectoryAnalyzer:
                 f.write(f"| Success Ratio | {result.success_ratio:.1%} ({sum(1 for a in result.actions if a.success)}/{len(result.actions)} actions) |\n")
                 f.write(f"| Cost | ${result.model_stats.instance_cost:.2f} |\n")
                 f.write(f"| API Calls | {result.model_stats.api_calls} |\n")
+                f.write(f"| Tokens Sent | {result.model_stats.tokens_sent:,} |\n")
+                f.write(f"| Tokens Received | {result.model_stats.tokens_received:,} |\n")
                 f.write(f"| MCP Usage | {result.mcp_usage:.1%} of steps |\n")
                 f.write(f"| Date | {result.date.split('T')[0] if 'T' in result.date else result.date} |\n\n")
 
@@ -893,11 +897,13 @@ class TrajectoryAnalyzer:
         """Write comparison table for MCP vs non-MCP results"""
         def calculate_metrics(results: List[TrajectoryAnalysis]):
             if not results:
-                return {"count": 0, "success_rate": 0, "avg_cost": 0, "avg_actions": 0, "patch_rate": 0, "avg_mcp_usage": 0}
+                return {"count": 0, "success_rate": 0, "avg_cost": 0, "avg_tokens_sent": 0, "avg_tokens_received": 0, "avg_actions": 0, "patch_rate": 0, "avg_mcp_usage": 0}
             return {
                 "count": len(results),
                 "success_rate": sum(1 for r in results if r.success) / len(results) * 100,
                 "avg_cost": sum(r.model_stats.instance_cost for r in results) / len(results),
+                "avg_tokens_sent": sum(r.model_stats.tokens_sent for r in results) / len(results),
+                "avg_tokens_received": sum(r.model_stats.tokens_received for r in results) / len(results),
                 "avg_actions": sum(len(r.actions) for r in results) / len(results),
                 "patch_rate": sum(1 for r in results if self._has_meaningful_patch(r.resulting_patch)) / len(results) * 100,
                 "avg_mcp_usage": sum(r.mcp_usage for r in results) / len(results) * 100,
@@ -918,6 +924,14 @@ class TrajectoryAnalyzer:
             cost_diff = mcp_metrics["avg_cost"] - no_mcp_metrics["avg_cost"]
             cost_arrow = "🔻" if cost_diff > 0.5 else "🔺" if cost_diff < -0.5 else "➡️"
             f.write(f"| Avg Cost | ${mcp_metrics['avg_cost']:.2f} | ${no_mcp_metrics['avg_cost']:.2f} | {cost_arrow} ${cost_diff:+.2f} |\n")
+
+            sent_diff = mcp_metrics["avg_tokens_sent"] - no_mcp_metrics["avg_tokens_sent"]
+            sent_arrow = "🔻" if sent_diff > 10000 else "🔺" if sent_diff < -10000 else "➡️"
+            f.write(f"| Avg Tokens Sent | {mcp_metrics['avg_tokens_sent']:,.0f} | {no_mcp_metrics['avg_tokens_sent']:,.0f} | {sent_arrow} {sent_diff:+,.0f} |\n")
+
+            recv_diff = mcp_metrics["avg_tokens_received"] - no_mcp_metrics["avg_tokens_received"]
+            recv_arrow = "🔻" if recv_diff > 1000 else "🔺" if recv_diff < -1000 else "➡️"
+            f.write(f"| Avg Tokens Received | {mcp_metrics['avg_tokens_received']:,.0f} | {no_mcp_metrics['avg_tokens_received']:,.0f} | {recv_arrow} {recv_diff:+,.0f} |\n")
 
             actions_diff = mcp_metrics["avg_actions"] - no_mcp_metrics["avg_actions"]
             actions_arrow = "🔻" if actions_diff > 10 else "🔺" if actions_diff < -10 else "➡️"
@@ -956,6 +970,7 @@ class TrajectoryAnalyzer:
         f.write("**📈 Metrics:** ")
         f.write(f"{result.success_ratio:.1%} success ({sum(1 for a in result.actions if a.success)}/{len(result.actions)} actions) | ")
         f.write(f"${result.model_stats.instance_cost:.2f} | ")
+        f.write(f"{result.model_stats.tokens_sent:,} sent / {result.model_stats.tokens_received:,} received | ")
         f.write(f"{result.mcp_usage:.1%} MCP usage\n\n")
 
         if include_patches and self._has_meaningful_patch(result.resulting_patch):
@@ -1050,10 +1065,14 @@ class TrajectoryAnalyzer:
         if used_mcp > 0:
             avg_usage_among_users = sum(r.mcp_usage for r in results if r.mcp_usage > 0) / used_mcp
             print(f"  Average MCP usage among MCP users: {avg_usage_among_users*100:.1f}% of steps")
+        total_tokens_sent = sum(r.model_stats.tokens_sent for r in results)
+        total_tokens_received = sum(r.model_stats.tokens_received for r in results)
         print(f"\nCost Analysis:")
         print(f"  Total cost: ${total_cost:.2f}")
         print(f"  Average cost per trajectory: ${total_cost/total_results:.2f}")
         print(f"  Total API calls: {total_api_calls:,}")
+        print(f"  Total tokens sent: {total_tokens_sent:,}")
+        print(f"  Total tokens received: {total_tokens_received:,}")
         print(f"\nPerformance Analysis:")
         print(f"  Average actions per trajectory: {avg_actions:.1f}")
 

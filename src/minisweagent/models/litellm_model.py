@@ -145,7 +145,16 @@ class LitellmModel:
         self._startup_mcp_capabilities_message = None
         cost_output = self._calculate_cost(response)
         GLOBAL_MODEL_STATS.add(cost_output["cost"])
-        
+
+        if not response.choices:
+            finish_reason = getattr(response, "finish_reason", None)
+            logger.error(f"Model returned empty choices list (finish_reason={finish_reason}). "
+                         "This typically indicates a safety filter block or provider-side error.")
+            raise RuntimeError(
+                f"Model returned empty choices (finish_reason={finish_reason}). "
+                "Response may have been blocked by a safety filter."
+            )
+
         message = response.choices[0].message.model_dump()
         
         # Log the model response content BEFORE trying to parse actions
